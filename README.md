@@ -140,6 +140,36 @@ The workflow is configured for hosted macOS, Linux, and Windows runners. Hosted
 runner results are available only after the workflow is pushed; local macOS
 checks and workflow syntax validation do not substitute for those reports.
 
+## Performance Baseline
+
+`scripts/perf/baseline.mjs` measures the current host CLI launch, desktop window
+readiness, and the desktop process tree after an idle stabilization period. It
+records OS, CPU, memory, toolchain, Git SHA, dirty state, binary sizes, durations,
+RSS, CPU, handles, and cleanup status in machine-readable JSON. It can also write
+a Markdown summary.
+
+```sh
+pnpm build:host
+pnpm build:desktop
+node scripts/perf/baseline.mjs \
+  --iterations 5 \
+  --idle-ms 3000 \
+  --output target/perf/baseline.json \
+  --markdown target/perf/baseline.md
+```
+
+The report separates the desktop root, WebKit/WebView helpers, a persistent host
+process if one is observed, and other children. Missing measurements are written
+as `NOT_AVAILABLE` with a reason, never as zero. The persistent host runtime does
+not exist yet, so host ready/idle metrics are unavailable while host CLI startup
+is measured. Desktop readiness uses an on-screen window probe on macOS and is
+unavailable on other platforms. RSS is available on Unix and Windows;
+working-set and private-byte values are Windows-specific. WebKit XPC processes
+reparented to `launchd` are attributed on a best-effort basis by start time.
+
+The harness terminates the launched desktop process tree and reports orphan
+processes. Baseline numbers are descriptive, not target-compliance claims.
+
 ## Shared Contracts
 
 Rust in `crates/contracts` is the source of truth. Change DTOs there, then run:
@@ -189,5 +219,7 @@ also requires the pinned Rust toolchain. Shared JSON fixtures live in
 - `packages/contracts`: generated TypeScript declarations and roundtrip tests.
 - `scripts`: toolchain diagnostics and contract generation/check commands.
 - `scripts/ci`: license, platform, and workflow safety checks used by CI.
+- `scripts/perf`: host/desktop performance baseline harness.
 - `.github/workflows`: the three-platform CI matrix and report jobs.
 - `tests/fixtures/contracts`: shared wire compatibility and failure fixtures.
+- `tests/benchmarks`: deterministic process-table fixture and harness notes.
