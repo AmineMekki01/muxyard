@@ -7,7 +7,8 @@ describe("workspace shell", () => {
   it("renders the shell with honest host and empty states", () => {
     const html = renderToStaticMarkup(<App />);
     expect(html).toContain("<h1>No project open</h1>");
-    expect(html).toContain("Host not connected");
+    expect(html).toContain("Host starting");
+    expect(html).toContain("Connecting to local host");
     expect(html).toContain("Remote off");
     expect(html).toContain("No pending attention");
     expect(html).toContain("Not run");

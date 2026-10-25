@@ -1916,8 +1916,13 @@ dependencies = [
 name = "muxyard-desktop"
 version = "0.1.0"
 dependencies = [
+ "muxyard-contracts",
+ "muxyard-ipc",
+ "muxyard-platform",
+ "serde_json",
  "tauri",
  "tauri-build",
+ "tempfile",
 ]
 
 [[package]]

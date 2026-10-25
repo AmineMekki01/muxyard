@@ -2,7 +2,8 @@
 
 use muxyard_contracts::{
     AgentStatus, ApiError, ControlEnvelope, ControlMessageType, ErrorCode, ExecutionEnvironment,
-    Id, MAX_CONTROL_BYTES, PROTOCOL_VERSION, ProtocolVersion, TaskState,
+    HostStatusEvent, HostStatusResponse, Id, MAX_CONTROL_BYTES, PROTOCOL_VERSION, ProtocolVersion,
+    TaskState,
 };
 use ts_rs::{Config, TS};
 
@@ -19,6 +20,8 @@ fn main() {
         ControlEnvelope::<()>::decl(&config),
         ErrorCode::decl(&config),
         ApiError::decl(&config),
+        HostStatusResponse::decl(&config),
+        HostStatusEvent::decl(&config),
         ExecutionEnvironment::decl(&config),
         TaskState::decl(&config),
         AgentStatus::decl(&config),

@@ -58,6 +58,67 @@ export type ApiError = {
   message: string;
 };
 
+export type HostStatusResponse = {
+  /**
+   * Host package version.
+   */
+  host_version: string;
+  /**
+   * Local control protocol version.
+   */
+  protocol_version: number;
+  /**
+   * Current process instance identifier.
+   */
+  instance_id: string;
+  /**
+   * Operating-system process ID.
+   */
+  pid: number;
+  /**
+   * OS process start identity for PID-reuse detection.
+   */
+  process_start: string;
+  /**
+   * Start time in Unix epoch milliseconds.
+   */
+  started_ms: number;
+  /**
+   * Whether startup completed and the host is accepting clients.
+   */
+  ready: boolean;
+};
+
+export type HostStatusEvent =
+  | {
+      kind: "snapshot";
+      /**
+       * Current host status.
+       */
+      status: HostStatusResponse;
+    }
+  | {
+      kind: "status";
+      /**
+       * Current host status.
+       */
+      status: HostStatusResponse;
+    }
+  | {
+      kind: "reconnecting";
+      /**
+       * Consecutive failed attempt count.
+       */
+      attempt: number;
+    }
+  | {
+      kind: "offline";
+      /**
+       * Stable typed failure.
+       */
+      error: ApiError;
+    };
+
 export type ExecutionEnvironment =
   | { kind: "native-mac" }
   | { kind: "native-linux" }

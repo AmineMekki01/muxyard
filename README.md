@@ -7,13 +7,16 @@ A fast, collaborative development terminal for coding with Claude Code, Codex, a
 ## Implementation Status
 
 The current build provides the application foundation, shared wire contracts, a
-keyboard-first desktop shell, a single-instance user-owned host, and a protected
-same-user local control endpoint, not a working terminal or agent runtime. The
-desktop displays an honest empty workspace. `muxyard-host start` launches a
+keyboard-first desktop shell, a single-instance user-owned host, a protected
+same-user local control endpoint, and a Tauri Rust host bridge. It is not yet a
+working terminal or agent runtime. The desktop displays an honest empty
+workspace with live host connection status. `muxyard-host start` launches a
 detached headless host; `run` stays in the foreground; `stop` and `status`
 manage the current user's host. The host opens private per-user configuration,
 logs, and a migrated SQLite database, and serves typed `host.status` requests
-over a Unix socket or Windows named pipe. It does not yet expose a terminal, an
+over a Unix socket or Windows named pipe. The desktop bridge auto-launches the
+host when absent, checks protocol compatibility, and watches status without
+exposing the raw endpoint to the webview. It does not yet expose a terminal, an
 agent, or an HTTP service. The remote-web package is an unconnected placeholder.
 
 ## Prerequisites
@@ -41,12 +44,22 @@ pnpm tauri dev
 ```
 
 `pnpm tauri dev` opens the native desktop and starts Vite only on
-`127.0.0.1:1420`. Close the native window or interrupt with Ctrl+C to stop
-development. Restart with the same command. `pnpm dev` starts only the desktop
-browser frontend, not the native app. `pnpm dev:remote` explicitly starts the
-placeholder remote frontend on `127.0.0.1:1421`, not a remote host gateway.
-Both servers require their exact ports and fail rather than silently changing
-ports. No production server or public listener is started.
+`127.0.0.1:1420`. Build a host binary first so the desktop bridge can find
+`muxyard-host` beside the desktop executable:
+
+```sh
+cargo build --locked -p muxyard-host   # development desktop
+pnpm build:host                        # release desktop smoke
+pnpm tauri dev
+```
+
+Alternatively set `MUXYARD_HOST_BIN` to an explicit host executable path. Close
+the native window or interrupt with Ctrl+C to stop development. Restart with the
+same command. `pnpm dev` starts only the desktop browser frontend, not the native
+app. `pnpm dev:remote` explicitly starts the placeholder remote frontend on
+`127.0.0.1:1421`, not a remote host gateway. Both servers require their exact
+ports and fail rather than silently changing ports. No production server or
+public listener is started.
 
 ```sh
 cargo run --locked -p muxyard-host -- --version
@@ -78,8 +91,9 @@ request.
 IO, so exiting the launcher or desktop UI does not terminate it. The host stops
 on explicit `stop` or Ctrl+C/SIGTERM. OS logout/reboot may stop it, but that
 behavior is not physically tested here. The host does not resume terminals after
-the host process exits. Unix runtime directories are 0700 and runtime files are 0600. The desktop bridge is a later ticket; a second `start` still reports the
-existing host rather than attaching a live client connection.
+the host process exits. Unix runtime directories are 0700 and runtime files are 0600. The desktop bridge connects to an existing host or launches one, and a
+second `start` still reports the existing host rather than opening a second
+writer.
 
 ## Local IPC
 
@@ -97,6 +111,17 @@ versioned control envelope is `{ v: 1, id, type, method, data }`. Responses use
 oversized, truncated, disconnected, cancelled, or idle connections from stopping
 the listener. The Rust `IpcClient` is the supported client; the React frontend
 does not connect to the raw endpoint.
+
+The Tauri Rust bridge exposes typed `host_connect`, `host_status`,
+`host_watch`, and `host_unwatch` commands. It checks protocol version 1, shows
+host starting/ready/reconnecting/offline/incompatible states, and retries status
+a bounded number of times before reporting `HOST_OFFLINE`. The status watcher
+uses a Tauri Channel; the webview receives no socket or TCP credentials. Closing
+the desktop window stops the watcher but never stops the host. Durable domain
+events and snapshot cursors are not implemented yet; the current subscription is
+host status only. No installer or sidecar bundle is produced yet, so the host
+executable must be beside the desktop executable, on `PATH`, or named by
+`MUXYARD_HOST_BIN`.
 
 ## Local Storage Foundation
 
@@ -278,7 +303,7 @@ also requires the pinned Rust toolchain. Shared JSON fixtures live in
 ## Layout
 
 - `apps/host`: native host lifecycle, runtime, and local IPC listener.
-- `apps/desktop`: React 19/Vite/Tailwind 4 frontend and Tauri 2 Rust shell.
+- `apps/desktop`: React 19/Vite/Tailwind 4 frontend and Tauri 2 Rust host bridge.
 - `apps/remote-web`: static, unconnected React/Vite client scaffold.
 - `crates/core`: UI-independent native foundation.
 - `crates/contracts`: authoritative DTOs, bounded JSON decoder, and code generator.

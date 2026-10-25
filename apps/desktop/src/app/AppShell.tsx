@@ -2,7 +2,10 @@
 
 import { useEffect, useState } from "react";
 
+import { useHostConnection } from "../ipc/useHostConnection";
+import { hostStatusDetail } from "../ipc/host";
 import { CommandPalette } from "../ui/CommandPalette";
+import { HostBanner, HostStatusPill } from "../ui/HostStatus";
 import { ShortcutHelp } from "../ui/ShortcutHelp";
 import { createCommands, type CommandContext } from "./commands";
 import {
@@ -17,6 +20,7 @@ const COMMANDS = createCommands();
 export function AppShell() {
   const [paletteOpen, setPaletteOpen] = useState(false);
   const [helpOpen, setHelpOpen] = useState(false);
+  const { state: hostState, reconnect } = useHostConnection();
   const {
     activeRegion,
     setActiveRegion,
@@ -101,7 +105,7 @@ export function AppShell() {
           >
             Command palette <kbd>Cmd/Ctrl+Shift+P</kbd>
           </button>
-          <span className="status-pill">Host not connected</span>
+          <HostStatusPill state={hostState} />
           <span className="status-pill status-pill-quiet">Remote off</span>
         </div>
       </header>
@@ -169,6 +173,7 @@ export function AppShell() {
           data-region={activeRegion === "main" ? "active" : undefined}
           onFocus={() => setActiveRegion("main")}
         >
+          <HostBanner state={hostState} onReconnect={reconnect} />
           <div className="empty-content">
             <p className="eyebrow">Your workspace</p>
             <h1>No project open</h1>
@@ -193,7 +198,8 @@ export function AppShell() {
             </div>
             <p className="scope-note">
               Project registration, terminals, agents, and remote access are not
-              connected yet. The shell is local and no AI backend is required.
+              connected yet. The host connection is local and no AI backend is
+              required.
             </p>
           </div>
         </main>
@@ -245,7 +251,7 @@ export function AppShell() {
         <span>Local application</span>
         <span>{sidebarOpen ? "Sidebar open" : "Sidebar hidden"}</span>
         <span>{inspectorOpen ? "Inspector open" : "Inspector hidden"}</span>
-        <span>Host not connected</span>
+        <span>{hostStatusDetail(hostState)}</span>
         <span>Remote off</span>
       </footer>
 

@@ -329,14 +329,58 @@ kbd {
   flex: 1;
   min-width: 0;
   overflow: auto;
-  display: grid;
-  place-items: center;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: var(--space-4);
   padding: var(--space-6) var(--space-5);
   background: radial-gradient(
     ellipse at 50% 40%,
     var(--color-surface-raised),
     var(--color-canvas) 72%
   );
+}
+
+.status-pill-host[data-host-state="connected"] {
+  border-color: var(--color-accent);
+  color: var(--color-accent-strong);
+  background: var(--color-accent-soft);
+}
+
+.status-pill-host[data-host-state="offline"],
+.status-pill-host[data-host-state="incompatible"] {
+  border-color: #d8b3a9;
+  color: #8a3b2d;
+  background: #fbf0ed;
+}
+
+.host-banner {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--space-4);
+  width: min(620px, 100%);
+  padding: var(--space-3) var(--space-4);
+  border: 1px solid #d8b3a9;
+  border-radius: var(--radius-md);
+  background: #fbf0ed;
+  color: #6e3025;
+}
+
+.host-banner-copy {
+  display: grid;
+  gap: 2px;
+}
+
+.host-banner-copy strong {
+  font-size: 13px;
+  font-weight: 600;
+}
+
+.host-banner-copy p {
+  font-size: 12px;
+  line-height: 1.5;
 }
 
 .empty-content {
