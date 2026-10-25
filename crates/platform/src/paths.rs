@@ -99,6 +99,11 @@ impl PlatformPaths {
         self.runtime_dir.join("host.ready")
     }
 
+    /// Unix-domain socket path used by the local host bridge.
+    pub fn local_socket_path(&self) -> PathBuf {
+        self.runtime_dir.join("muxyard.sock")
+    }
+
     /// Detached host startup diagnostics.
     pub fn startup_log_path(&self) -> PathBuf {
         self.runtime_dir.join("host-startup.log")

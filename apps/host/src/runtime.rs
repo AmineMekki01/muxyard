@@ -13,6 +13,7 @@ use std::{
 };
 
 use muxyard_contracts::PROTOCOL_VERSION;
+use muxyard_ipc::{HostStatusResponse, IpcServer};
 use muxyard_platform::{
     ConfigStore, PlatformPaths, configure_detached, current_process_identity, open_private_append,
     write_private_file,
@@ -78,6 +79,7 @@ pub struct HostRuntime {
     lock: HostLock,
     instance_id: String,
     stop: Arc<AtomicBool>,
+    ipc: IpcServer,
 }
 
 impl HostRuntime {
@@ -122,6 +124,18 @@ impl HostRuntime {
             #[cfg(windows)]
             tracing::warn!(%error, "console signal handler unavailable; stop marker remains active");
         }
+        let ipc = IpcServer::start(
+            &paths,
+            HostStatusResponse {
+                host_version: env!("CARGO_PKG_VERSION").to_string(),
+                protocol_version: PROTOCOL_VERSION,
+                instance_id: instance_id.clone(),
+                pid: identity.pid,
+                process_start: identity.start_identity.clone(),
+                started_ms: lock.info().started_ms,
+                ready: true,
+            },
+        )?;
         write_ready_marker(&paths.host_ready_path(), lock.info())?;
 
         tracing::info!(
@@ -137,6 +151,7 @@ impl HostRuntime {
             lock,
             instance_id,
             stop,
+            ipc,
         })
     }
 
@@ -148,6 +163,7 @@ impl HostRuntime {
             lock,
             instance_id,
             stop,
+            mut ipc,
         } = self;
         let mut last_heartbeat = Instant::now();
         let reason = loop {
@@ -177,6 +193,7 @@ impl HostRuntime {
         };
 
         tracing::info!(reason, "host stopping");
+        ipc.stop();
         let mut result = Ok(());
         if let Err(error) = update_host_instance_state(
             database.connection(),

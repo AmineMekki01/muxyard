@@ -56,6 +56,9 @@ pub enum HostError {
     /// The single-instance lock failed.
     #[error(transparent)]
     Lock(#[from] LockError),
+    /// The protected local control endpoint failed.
+    #[error(transparent)]
+    Ipc(#[from] muxyard_ipc::IpcError),
     /// The operating-system user name is unavailable.
     #[error("operating-system user name is not available")]
     MissingOsUser,

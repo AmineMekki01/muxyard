@@ -7,13 +7,14 @@ A fast, collaborative development terminal for coding with Claude Code, Codex, a
 ## Implementation Status
 
 The current build provides the application foundation, shared wire contracts, a
-keyboard-first desktop shell, and a single-instance user-owned host, not a
-working terminal or agent runtime. The desktop displays an honest empty
-workspace. `muxyard-host start` launches a detached headless host; `run` stays in
-the foreground; `stop` and `status` manage the current user's host. The host
-opens private per-user configuration, logs, and a migrated SQLite database. It
-does not yet expose local IPC, a terminal, an agent, or an HTTP service. The
-remote-web package is an unconnected placeholder.
+keyboard-first desktop shell, a single-instance user-owned host, and a protected
+same-user local control endpoint, not a working terminal or agent runtime. The
+desktop displays an honest empty workspace. `muxyard-host start` launches a
+detached headless host; `run` stays in the foreground; `stop` and `status`
+manage the current user's host. The host opens private per-user configuration,
+logs, and a migrated SQLite database, and serves typed `host.status` requests
+over a Unix socket or Windows named pipe. It does not yet expose a terminal, an
+agent, or an HTTP service. The remote-web package is an unconnected placeholder.
 
 ## Prerequisites
 
@@ -77,10 +78,25 @@ request.
 IO, so exiting the launcher or desktop UI does not terminate it. The host stops
 on explicit `stop` or Ctrl+C/SIGTERM. OS logout/reboot may stop it, but that
 behavior is not physically tested here. The host does not resume terminals after
-the host process exits. Unix runtime directories are 0700 and runtime files are
-0600; Windows ACL hardening remains pending. Local IPC and the desktop bridge
-arrive in a later ticket, so a second `start` reports the existing host rather
-than attaching a live client connection.
+the host process exits. Unix runtime directories are 0700 and runtime files are 0600. The desktop bridge is a later ticket; a second `start` still reports the
+existing host rather than attaching a live client connection.
+
+## Local IPC
+
+The host exposes only `host.status` on a same-user OS-local transport. On Unix
+the socket is `runtime/muxyard.sock` with mode 0600 inside a 0700 runtime
+directory, and the host checks the peer's effective UID. On Windows the named
+pipe is derived from the current user SID and its DACL grants full control only
+to that SID; the transport also rejects remote clients. Windows SID lookup,
+ACL behavior, and the named-pipe path are not verified on this macOS machine.
+
+Frames are a 4-byte big-endian length plus UTF-8 JSON, from 1 byte to 1 MiB. The
+versioned control envelope is `{ v: 1, id, type, method, data }`. Responses use
+`{ status: "ok", data }` or `{ status: "error", error }` with stable
+`ApiError` codes. The server applies a five-second timeout and keeps malformed,
+oversized, truncated, disconnected, cancelled, or idle connections from stopping
+the listener. The Rust `IpcClient` is the supported client; the React frontend
+does not connect to the raw endpoint.
 
 ## Local Storage Foundation
 
@@ -103,7 +119,8 @@ macOS the default data directory is
 `~/Library/Application Support/Muxyard`; Linux follows the XDG data, config, and
 runtime conventions; Windows uses the local and roaming application-data
 directories. Windows file ACL hardening is not implemented, and native path
-behavior is not verified on this machine.
+behavior is not verified on this machine. The local IPC named pipe has its own
+current-user DACL, but that path is also unverified on macOS.
 
 ## Checks And Builds
 
@@ -260,11 +277,12 @@ also requires the pinned Rust toolchain. Shared JSON fixtures live in
 
 ## Layout
 
-- `apps/host`: native CLI scaffold, no persistent runtime.
+- `apps/host`: native host lifecycle, runtime, and local IPC listener.
 - `apps/desktop`: React 19/Vite/Tailwind 4 frontend and Tauri 2 Rust shell.
 - `apps/remote-web`: static, unconnected React/Vite client scaffold.
 - `crates/core`: UI-independent native foundation.
 - `crates/contracts`: authoritative DTOs, bounded JSON decoder, and code generator.
+- `crates/ipc`: protected local socket/named-pipe transport, typed `host.status` client, and framing.
 - `crates/platform`: per-user paths, validated configuration, and secret-safe logging.
 - `crates/storage`: SQLite connection policy, checksummed migrations, and host records.
 - `packages/contracts`: generated TypeScript declarations and roundtrip tests.

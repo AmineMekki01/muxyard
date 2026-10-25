@@ -8,6 +8,8 @@ use std::{
     time::{Duration, Instant},
 };
 
+use muxyard_ipc::IpcClient;
+use muxyard_platform::PlatformPaths;
 use muxyard_storage::Database;
 use serde_json::Value;
 
@@ -477,6 +479,45 @@ fn killed_host_sessions_are_marked_lost_on_restart() {
         )
         .unwrap();
     assert_eq!(session_state, "lost");
+}
+
+#[test]
+fn local_ipc_reports_host_status_and_closes_with_host() {
+    let host = HostGuard::new();
+    assert!(host.start().status.success());
+    let pid = status_pid(&host);
+    let (_, lock_status) = host.status_json();
+    let instance_id = lock_status["instance_id"].as_str().unwrap().to_string();
+    let paths = PlatformPaths::from_root(&host.root);
+
+    let mut client = IpcClient::connect(&paths).unwrap();
+    let status = client.host_status().unwrap();
+    assert_eq!(status.instance_id, instance_id);
+    assert_eq!(status.pid, pid);
+    assert_eq!(status.protocol_version, 1);
+    assert!(status.ready);
+    assert_eq!(status.host_version, env!("CARGO_PKG_VERSION"));
+    assert_eq!(
+        status.started_ms,
+        lock_status["started_ms"].as_i64().unwrap()
+    );
+    drop(client);
+
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::{FileTypeExt, PermissionsExt};
+        let socket_path = paths.local_socket_path();
+        assert_eq!(
+            fs::metadata(&socket_path).unwrap().permissions().mode() & 0o777,
+            0o600
+        );
+        assert!(fs::metadata(&socket_path).unwrap().file_type().is_socket());
+    }
+
+    assert!(host.stop().status.success());
+    assert!(IpcClient::connect(&paths).is_err());
+    #[cfg(unix)]
+    assert!(!paths.local_socket_path().exists());
 }
 
 #[cfg(unix)]
