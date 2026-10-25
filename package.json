@@ -10,17 +10,19 @@
   },
   "scripts": {
     "doctor": "node scripts/doctor.mjs",
+    "contracts:generate": "node scripts/contracts.mjs",
+    "contracts:check": "node scripts/contracts.mjs --check",
     "dev": "pnpm --filter @muxyard/desktop dev",
     "dev:remote": "pnpm --filter @muxyard/remote-web dev",
     "tauri": "node scripts/doctor.mjs && pnpm --filter @muxyard/desktop tauri",
     "build": "pnpm -r build",
     "build:host": "cargo build --locked --release -p muxyard-host",
     "build:desktop": "pnpm tauri build --no-bundle",
-    "format": "prettier --write .",
-    "format:check": "prettier --check .",
-    "lint": "eslint . --max-warnings 0",
+    "format": "prettier --write \"*.{json,js,ts,yaml}\" README.md apps packages scripts tests",
+    "format:check": "prettier --check \"*.{json,js,ts,yaml}\" README.md apps packages scripts tests",
+    "lint": "eslint apps packages scripts eslint.config.js prettier.config.js vitest.config.ts --max-warnings 0",
     "typecheck": "pnpm -r typecheck && tsc --project tsconfig.node.json",
-    "test": "node --test scripts/doctor.test.mjs && vitest run"
+    "test": "node --test scripts/*.test.mjs && vitest run"
   },
   "devDependencies": {
     "@eslint/js": "10.0.1",

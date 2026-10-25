@@ -1,4 +1,4 @@
-//! Minimal desktop shell. Host ownership and the IPC bridge are later tickets.
+//! Desktop application window and native runtime entry point.
 
 /// Open the empty workspace window without starting a host or remote gateway.
 ///

@@ -29,7 +29,6 @@ rustc-ice-*.txt
 
 # Custom
 .DS_Store
-workspace-blueprint
 
 # Muxyard generated artifacts
 node_modules/

@@ -4,12 +4,10 @@ import tseslint from "typescript-eslint";
 export default tseslint.config(
   {
     ignores: [
-      ".devin/**",
       "**/dist/**",
       "**/node_modules/**",
       "**/src-tauri/gen/**",
       "target/**",
-      "workspace-blueprint/**",
     ],
   },
   js.configs.recommended,
@@ -17,7 +15,12 @@ export default tseslint.config(
   {
     files: ["scripts/*.mjs"],
     languageOptions: {
-      globals: { console: "readonly", process: "readonly" },
+      globals: {
+        console: "readonly",
+        process: "readonly",
+        URL: "readonly",
+        AbortController: "readonly",
+      },
     },
   },
 );

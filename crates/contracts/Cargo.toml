@@ -5,5 +5,17 @@ edition.workspace = true
 rust-version.workspace = true
 publish.workspace = true
 
+[features]
+typescript = ["dep:ts-rs"]
+
+[dependencies]
+serde.workspace = true
+serde_json.workspace = true
+ts-rs = { version = "=12.0.1", optional = true }
+
+[[example]]
+name = "export_types"
+required-features = ["typescript"]
+
 [lints]
 workspace = true

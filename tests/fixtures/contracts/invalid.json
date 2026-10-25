@@ -1,0 +1,47 @@
+[
+  {
+    "name": "unsupported version",
+    "input": "{\"v\":2,\"id\":\"id\",\"type\":\"request\",\"method\":\"fixture\",\"data\":\"ready\"}",
+    "code": "UNSUPPORTED_VERSION"
+  },
+  {
+    "name": "zero version",
+    "input": "{\"v\":0,\"id\":\"id\",\"type\":\"request\",\"method\":\"fixture\",\"data\":\"ready\"}",
+    "code": "UNSUPPORTED_VERSION"
+  },
+  {
+    "name": "truncated JSON",
+    "input": "{\"v\":1,\"id\":",
+    "code": "INVALID_REQUEST"
+  },
+  {
+    "name": "unknown task state",
+    "input": "{\"v\":1,\"id\":\"id\",\"type\":\"request\",\"method\":\"fixture\",\"data\":\"secret-invalid-state\"}",
+    "code": "INVALID_REQUEST"
+  },
+  {
+    "name": "unknown message type",
+    "input": "{\"v\":1,\"id\":\"id\",\"type\":\"exec\",\"method\":\"fixture\",\"data\":\"ready\"}",
+    "code": "INVALID_REQUEST"
+  },
+  {
+    "name": "missing payload",
+    "input": "{\"v\":1,\"id\":\"id\",\"type\":\"request\",\"method\":\"fixture\"}",
+    "code": "INVALID_REQUEST"
+  },
+  {
+    "name": "string version",
+    "input": "{\"v\":\"1\",\"id\":\"id\",\"type\":\"request\",\"method\":\"fixture\",\"data\":\"ready\"}",
+    "code": "INVALID_REQUEST"
+  },
+  {
+    "name": "extra envelope field",
+    "input": "{\"v\":1,\"id\":\"id\",\"type\":\"request\",\"method\":\"fixture\",\"data\":\"ready\",\"exec\":\"secret-command\"}",
+    "code": "INVALID_REQUEST"
+  },
+  {
+    "name": "duplicate version",
+    "input": "{\"v\":1,\"v\":2,\"id\":\"id\",\"type\":\"request\",\"method\":\"fixture\",\"data\":\"ready\"}",
+    "code": "INVALID_REQUEST"
+  }
+]

@@ -1,4 +1,4 @@
-//! Host CLI scaffold. FND-001 starts no daemon, child process, or listener.
+//! Host CLI that reports version and usage without starting services.
 
 use std::{env, process::ExitCode};
 

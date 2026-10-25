@@ -1,0 +1,7 @@
+{
+  "v": 1,
+  "id": "8c726d06-989a-47e7-b351-17277b6a40b0",
+  "type": "event",
+  "method": "agent.status",
+  "data": "needs_input"
+}

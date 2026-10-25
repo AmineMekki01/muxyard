@@ -1,5 +1,2 @@
-/**
- * Contract package boundary. FND-002 generates DTOs from Rust authority here.
- * FND-001 intentionally exposes no handwritten wire contracts.
- */
-export {};
+/** Rust-derived wire declarations. These types do not validate untrusted JSON. */
+export * from "./generated";

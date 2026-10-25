@@ -6,15 +6,10 @@ A fast, collaborative development terminal for coding with Claude Code, Codex, a
 
 ## Implementation Status
 
-FND-001 is the original application foundation, not a working terminal or agent
-runtime. The desktop displays an empty workspace. `muxyard-host` reports its
+The current build provides the application foundation and shared wire contracts,
+not a working terminal or agent runtime. The desktop displays an empty workspace. `muxyard-host` reports its
 version or help and exits without starting a daemon, socket, database, child
 process, or HTTP service. The remote-web package is an unconnected placeholder.
-See [current state](docs/CURRENT_STATE.md) and [handoff](docs/AGENT_HANDOFF.md)
-for verified behavior and outstanding checks.
-
-The root specification files are authoritative. `workspace-blueprint/` is the
-unchanged local source archive, not an application directory.
 
 ## Prerequisites
 
@@ -45,7 +40,7 @@ development. Restart with the same command. `pnpm dev` starts only the desktop
 browser frontend, not the native app. `pnpm dev:remote` explicitly starts the
 placeholder remote frontend on `127.0.0.1:1421`, not a remote host gateway.
 Both servers require their exact ports and fail rather than silently changing
-ports. No production server or public listener exists in this ticket.
+ports. No production server or public listener is started.
 
 ```sh
 cargo run --locked -p muxyard-host -- --version
@@ -64,6 +59,7 @@ pnpm format:check
 pnpm lint
 pnpm typecheck
 pnpm test
+pnpm contracts:check
 pnpm build
 pnpm build:host
 pnpm build:desktop
@@ -71,14 +67,50 @@ pnpm build:desktop
 
 `pnpm build` checks the contracts boundary and builds both Vite clients.
 `pnpm build:desktop` produces a release native executable with embedded frontend
-assets, without signed installers. Installers, signing, CI, daemon ownership,
-IPC, terminals, and provider integration remain later tickets. Rust build/test
+assets, without signed installers. Persistent host services, terminal sessions,
+and provider integration are not available yet. Rust build/test
 commands for the desktop need the platform's native Tauri libraries.
 
-`pnpm format` and `cargo fmt` format application source. Imported locked
-specifications are excluded from Prettier to preserve their content.
+`pnpm format` and `cargo fmt` format application source.
 Rust/TypeScript lockfiles must be checked into the eventual authorized commit.
 Never regenerate dependencies implicitly in CI.
+
+## Shared Contracts
+
+Rust in `crates/contracts` is the source of truth. Change DTOs there, then run:
+
+```sh
+pnpm contracts:generate
+pnpm contracts:check
+pnpm typecheck
+pnpm test
+```
+
+Commit the generated `packages/contracts/src/generated.ts` alongside Rust
+changes. `contracts:check` compares freshly derived, formatted declarations
+without rewriting files and exits nonzero on drift. Generation requires Cargo
+and Prettier; failures or cancellation leave existing declarations unchanged.
+The MIT-licensed `ts-rs` 12.0.1 generator is an optional development-only Rust
+dependency and is absent from default host/desktop dependency trees.
+
+The JSON control envelope is `{ v: 1, id, type, method, data }`, where `type` is
+`request`, `response`, or `event`. A response echoes the request's `id` for
+correlation. `data` is method-specific. Methods in test fixtures are examples,
+not implemented endpoints. Control events here are not the durable event
+envelope with stream cursors and sequence numbers.
+
+Native receivers use `decode_control<T>` to enforce the 1 MiB JSON byte limit,
+version 1, and the expected DTO shape. Unknown versions return
+`UNSUPPORTED_VERSION`; malformed DTOs return `INVALID_REQUEST`; oversized
+messages return `PAYLOAD_TOO_LARGE`. Parser diagnostics never echo input.
+The generated TypeScript types are compile-time declarations, not runtime
+validation of arbitrary JSON. IDs, methods, WSL distribution availability,
+state transitions, authentication, and authorization still require host/domain
+validation. No transport, state mutation, or services are started by contracts.
+
+Contract tests invoke the real Rust fixture tool from Vitest, so `pnpm test`
+also requires the pinned Rust toolchain. Shared JSON fixtures live in
+`tests/fixtures/contracts`.
 
 ## Layout
 
@@ -86,7 +118,7 @@ Never regenerate dependencies implicitly in CI.
 - `apps/desktop`: React 19/Vite/Tailwind 4 frontend and Tauri 2 Rust shell.
 - `apps/remote-web`: static, unconnected React/Vite client scaffold.
 - `crates/core`: UI-independent native foundation.
-- `crates/contracts`: authoritative protocol metadata, DTOs deferred to FND-002.
-- `packages/contracts`: TypeScript boundary, no duplicate handwritten wire DTOs.
-- `scripts`: toolchain diagnostic and missing-dependency regression test.
-- `docs` and `tasks`: approved specifications, evidence, continuity, and tickets.
+- `crates/contracts`: authoritative DTOs, bounded JSON decoder, and code generator.
+- `packages/contracts`: generated TypeScript declarations and roundtrip tests.
+- `scripts`: toolchain diagnostics and contract generation/check commands.
+- `tests/fixtures/contracts`: shared wire compatibility and failure fixtures.

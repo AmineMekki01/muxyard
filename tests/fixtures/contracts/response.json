@@ -1,0 +1,10 @@
+{
+  "v": 1,
+  "id": "08ac1e24-30ea-46cc-bebf-4ba29a099452",
+  "type": "response",
+  "method": "workspace.environment",
+  "data": {
+    "code": "HOST_OFFLINE",
+    "message": "Workspace host is not connected."
+  }
+}

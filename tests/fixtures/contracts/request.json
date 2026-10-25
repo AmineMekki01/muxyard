@@ -1,0 +1,10 @@
+{
+  "v": 1,
+  "id": "08ac1e24-30ea-46cc-bebf-4ba29a099452",
+  "type": "request",
+  "method": "workspace.environment",
+  "data": {
+    "kind": "wsl",
+    "distro": "Ubuntu-24.04"
+  }
+}
