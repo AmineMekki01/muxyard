@@ -8,6 +8,9 @@ pub use muxyard_contracts::{HostStatusRequest, HostStatusResponse};
 /// Method name for the local host status query.
 pub const HOST_STATUS_METHOD: &str = "host.status";
 
+/// Method name for subscribing a connection to a terminal stream.
+pub const TERMINAL_ATTACH_METHOD: &str = "terminal.attach";
+
 /// Success or typed failure for one local request.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(tag = "status", rename_all = "lowercase", deny_unknown_fields)]

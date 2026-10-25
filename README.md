@@ -16,8 +16,10 @@ manage the current user's host. The host opens private per-user configuration,
 logs, and a migrated SQLite database, and serves typed `host.status` requests
 over a Unix socket or Windows named pipe. The desktop bridge auto-launches the
 host when absent, checks protocol compatibility, and watches status without
-exposing the raw endpoint to the webview. It does not yet expose a terminal, an
-agent, or an HTTP service. The remote-web package is an unconnected placeholder.
+exposing the raw endpoint to the webview. Binary terminal stream framing and
+bounded per-client backpressure are implemented as transport primitives; a PTY
+and terminal UI are not yet wired. It does not yet expose an agent or an HTTP
+service. The remote-web package is an unconnected placeholder.
 
 ## Prerequisites
 
@@ -97,20 +99,28 @@ writer.
 
 ## Local IPC
 
-The host exposes only `host.status` on a same-user OS-local transport. On Unix
-the socket is `runtime/muxyard.sock` with mode 0600 inside a 0700 runtime
-directory, and the host checks the peer's effective UID. On Windows the named
-pipe is derived from the current user SID and its DACL grants full control only
-to that SID; the transport also rejects remote clients. Windows SID lookup,
-ACL behavior, and the named-pipe path are not verified on this macOS machine.
+The host exposes typed `host.status` and, when terminal streaming is enabled,
+`terminal.attach` on a same-user OS-local transport. On Unix the socket is
+`runtime/muxyard.sock` with mode 0600 inside a 0700 runtime directory, and the
+host checks the peer's effective UID. On Windows the named pipe is derived from
+the current user SID and its DACL grants full control only to that SID; the
+transport also rejects remote clients. Windows SID lookup, ACL behavior, and the
+named-pipe path are not verified on this macOS machine.
 
-Frames are a 4-byte big-endian length plus UTF-8 JSON, from 1 byte to 1 MiB. The
-versioned control envelope is `{ v: 1, id, type, method, data }`. Responses use
-`{ status: "ok", data }` or `{ status: "error", error }` with stable
+Control frames are a 4-byte big-endian length plus UTF-8 JSON, from 1 byte to
+1 MiB. The versioned control envelope is `{ v: 1, id, type, method, data }`.
+Responses use `{ status: "ok", data }` or `{ status: "error", error }` with stable
 `ApiError` codes. The server applies a five-second timeout and keeps malformed,
 oversized, truncated, disconnected, cancelled, or idle connections from stopping
 the listener. The Rust `IpcClient` is the supported client; the React frontend
 does not connect to the raw endpoint.
+
+Terminal output uses a typed `terminal.attach` request followed by binary frames
+on that connection. Frames carry a stream UUID, monotonic sequence, kind, and up
+to 64 KiB of payload. Each attached client has a bounded 1–4 MiB write queue; a
+slow subscriber is detached without blocking other subscribers or the control
+listener. The codec defines input, resize, end, flow-control, and ACK kinds, but
+actual PTY input and credit wiring remain future terminal work.
 
 The Tauri Rust bridge exposes typed `host_connect`, `host_status`,
 `host_watch`, and `host_unwatch` commands. It checks protocol version 1, shows
@@ -308,6 +318,7 @@ also requires the pinned Rust toolchain. Shared JSON fixtures live in
 - `crates/core`: UI-independent native foundation.
 - `crates/contracts`: authoritative DTOs, bounded JSON decoder, and code generator.
 - `crates/ipc`: protected local socket/named-pipe transport, typed `host.status` client, and framing.
+- `crates/terminal`: terminal binary frame codec, bounded per-client queues, and slow-subscriber detachment.
 - `crates/platform`: per-user paths, validated configuration, and secret-safe logging.
 - `crates/storage`: SQLite connection policy, checksummed migrations, and host records.
 - `packages/contracts`: generated TypeScript declarations and roundtrip tests.

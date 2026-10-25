@@ -28,13 +28,17 @@ use muxyard_contracts::{
     ApiError, ControlEnvelope, ControlMessageType, ErrorCode, Id, ProtocolVersion, decode_control,
 };
 use muxyard_platform::PlatformPaths;
+use muxyard_terminal::{
+    MAX_TERMINAL_PAYLOAD, TerminalAttachRequest, TerminalAttachResponse, TerminalHub,
+    TerminalHubError, TerminalSubscription,
+};
 use serde::Serialize;
 use serde_json::Value;
 use tracing::warn;
 
 use crate::{
     HOST_STATUS_METHOD, HostStatusRequest, HostStatusResponse, IpcError, IpcResponse,
-    read_frame_until, write_frame_until,
+    TERMINAL_ATTACH_METHOD, read_frame_until, write_frame_until,
 };
 
 /// Bounds applied to one local client connection.
@@ -68,13 +72,41 @@ impl IpcServer {
     /// made owner-only after binding. On Windows the named pipe receives a
     /// security descriptor for the current user's SID.
     pub fn start(paths: &PlatformPaths, status: HostStatusResponse) -> Result<Self, IpcError> {
-        Self::start_with_options(paths, status, IpcOptions::default())
+        Self::start_inner(paths, status, None, IpcOptions::default())
     }
 
     /// Bind the endpoint with explicit timeout settings.
     pub fn start_with_options(
         paths: &PlatformPaths,
         status: HostStatusResponse,
+        options: IpcOptions,
+    ) -> Result<Self, IpcError> {
+        Self::start_inner(paths, status, None, options)
+    }
+
+    /// Bind the endpoint and enable terminal stream attachments.
+    pub fn start_with_terminal(
+        paths: &PlatformPaths,
+        status: HostStatusResponse,
+        terminal: Arc<TerminalHub>,
+    ) -> Result<Self, IpcError> {
+        Self::start_inner(paths, status, Some(terminal), IpcOptions::default())
+    }
+
+    /// Bind the endpoint with terminal streams and explicit timeouts.
+    pub fn start_with_terminal_and_options(
+        paths: &PlatformPaths,
+        status: HostStatusResponse,
+        terminal: Arc<TerminalHub>,
+        options: IpcOptions,
+    ) -> Result<Self, IpcError> {
+        Self::start_inner(paths, status, Some(terminal), options)
+    }
+
+    fn start_inner(
+        paths: &PlatformPaths,
+        status: HostStatusResponse,
+        terminal: Option<Arc<TerminalHub>>,
         options: IpcOptions,
     ) -> Result<Self, IpcError> {
         let listener = create_listener(paths)?;
@@ -86,6 +118,7 @@ impl IpcServer {
         let accept_stop = Arc::clone(&stop);
         let accept_connections = Arc::clone(&connections);
         let accept_status = Arc::new(status);
+        let accept_terminal = terminal;
         let accept_thread = thread::Builder::new()
             .name("muxyard-ipc-accept".to_string())
             .spawn(move || {
@@ -94,6 +127,7 @@ impl IpcServer {
                     accept_stop,
                     accept_connections,
                     accept_status,
+                    accept_terminal,
                     options,
                 );
             })
@@ -143,6 +177,7 @@ fn accept_loop(
     stop: Arc<AtomicBool>,
     connections: Arc<Mutex<Vec<JoinHandle<()>>>>,
     status: Arc<HostStatusResponse>,
+    terminal: Option<Arc<TerminalHub>>,
     options: IpcOptions,
 ) {
     while !stop.load(Ordering::SeqCst) {
@@ -150,12 +185,14 @@ fn accept_loop(
             Ok(stream) => {
                 let connection_stop = Arc::clone(&stop);
                 let connection_status = Arc::clone(&status);
+                let connection_terminal = terminal.clone();
                 match thread::Builder::new()
                     .name("muxyard-ipc-connection".to_string())
                     .spawn(move || {
                         if let Err(error) = handle_connection(
                             stream,
                             connection_status.as_ref(),
+                            connection_terminal.as_deref(),
                             connection_stop.as_ref(),
                             options,
                         ) {
@@ -185,6 +222,7 @@ fn accept_loop(
 fn handle_connection(
     mut stream: LocalSocketStream,
     status: &HostStatusResponse,
+    terminal: Option<&TerminalHub>,
     stop: &AtomicBool,
     options: IpcOptions,
 ) -> Result<(), IpcError> {
@@ -201,18 +239,35 @@ fn handle_connection(
             Ok(None) => return Ok(()),
             Err(error) => return Err(error),
         };
-        if !handle_frame(&mut stream, &frame, status, options.request_timeout)? {
-            return Ok(());
+        match handle_frame(
+            &mut stream,
+            &frame,
+            status,
+            terminal,
+            options.request_timeout,
+        )? {
+            FrameAction::Continue => {}
+            FrameAction::Close => return Ok(()),
+            FrameAction::Terminal(subscription) => {
+                return stream_terminal(&mut stream, subscription, stop, options.request_timeout);
+            }
         }
     }
+}
+
+enum FrameAction {
+    Continue,
+    Close,
+    Terminal(TerminalSubscription),
 }
 
 fn handle_frame(
     stream: &mut LocalSocketStream,
     frame: &[u8],
     status: &HostStatusResponse,
+    terminal: Option<&TerminalHub>,
     timeout: Duration,
-) -> Result<bool, IpcError> {
+) -> Result<FrameAction, IpcError> {
     let request = match decode_control::<Value>(frame) {
         Ok(request) => request,
         Err(error) => {
@@ -220,7 +275,7 @@ fn handle_frame(
             if let Some(id) = id {
                 write_error(stream, id, method, error, timeout)?;
             }
-            return Ok(false);
+            return Ok(FrameAction::Close);
         }
     };
 
@@ -232,7 +287,7 @@ fn handle_frame(
             invalid_request("Only control requests are accepted on this endpoint."),
             timeout,
         )?;
-        return Ok(false);
+        return Ok(FrameAction::Close);
     }
     if request.id.0.trim().is_empty() {
         write_error(
@@ -242,7 +297,7 @@ fn handle_frame(
             invalid_request("Control request identifiers must not be empty."),
             timeout,
         )?;
-        return Ok(false);
+        return Ok(FrameAction::Close);
     }
 
     match request.method.as_str() {
@@ -255,7 +310,7 @@ fn handle_frame(
                     invalid_request("The host.status request body is invalid."),
                     timeout,
                 )?;
-                return Ok(true);
+                return Ok(FrameAction::Continue);
             }
             let data = serde_json::to_value(status)?;
             write_response(
@@ -265,6 +320,61 @@ fn handle_frame(
                 IpcResponse::ok(data),
                 timeout,
             )?;
+        }
+        TERMINAL_ATTACH_METHOD => {
+            let Some(terminal) = terminal else {
+                write_error(
+                    stream,
+                    request.id,
+                    request.method,
+                    ApiError {
+                        code: ErrorCode::UnsupportedCapability,
+                        message: "Terminal streams are not available on this host.".to_string(),
+                    },
+                    timeout,
+                )?;
+                return Ok(FrameAction::Continue);
+            };
+            let attach: TerminalAttachRequest = match serde_json::from_value(request.data) {
+                Ok(attach) => attach,
+                Err(_) => {
+                    write_error(
+                        stream,
+                        request.id,
+                        request.method,
+                        invalid_request("The terminal.attach request body is invalid."),
+                        timeout,
+                    )?;
+                    return Ok(FrameAction::Continue);
+                }
+            };
+            let subscription = match terminal.subscribe(attach.stream_id, attach.queue_bytes) {
+                Ok(subscription) => subscription,
+                Err(error) => {
+                    write_error(
+                        stream,
+                        request.id,
+                        request.method,
+                        terminal_hub_error(error),
+                        timeout,
+                    )?;
+                    return Ok(FrameAction::Continue);
+                }
+            };
+            let response = TerminalAttachResponse {
+                stream_id: subscription.stream_id(),
+                queue_bytes: u32::try_from(subscription.queue_capacity()).unwrap_or(u32::MAX),
+                max_frame_bytes: MAX_TERMINAL_PAYLOAD as u32,
+                next_sequence: subscription.next_sequence(),
+            };
+            write_response(
+                stream,
+                request.id,
+                request.method,
+                IpcResponse::ok(response),
+                timeout,
+            )?;
+            return Ok(FrameAction::Terminal(subscription));
         }
         _ => {
             write_error(
@@ -279,7 +389,47 @@ fn handle_frame(
             )?;
         }
     }
-    Ok(true)
+    Ok(FrameAction::Continue)
+}
+
+fn terminal_hub_error(error: TerminalHubError) -> ApiError {
+    match error {
+        TerminalHubError::UnknownSession(_) => ApiError {
+            code: ErrorCode::NotFound,
+            message: "The requested terminal stream does not exist.".to_string(),
+        },
+        TerminalHubError::TooManySessions(_) => ApiError {
+            code: ErrorCode::RateLimited,
+            message: "Too many terminal streams are active.".to_string(),
+        },
+        TerminalHubError::InvalidQueue { .. } | TerminalHubError::InvalidLimits(_) => ApiError {
+            code: ErrorCode::InvalidRequest,
+            message: "The requested terminal queue size is invalid.".to_string(),
+        },
+        TerminalHubError::Closed => ApiError {
+            code: ErrorCode::NotFound,
+            message: "The requested terminal stream is closed.".to_string(),
+        },
+    }
+}
+
+fn stream_terminal(
+    stream: &mut LocalSocketStream,
+    subscription: TerminalSubscription,
+    stop: &AtomicBool,
+    timeout: Duration,
+) -> Result<(), IpcError> {
+    loop {
+        if stop.load(Ordering::SeqCst) {
+            return Ok(());
+        }
+        if let Some(frame) = subscription.wait_next(Duration::from_millis(100)) {
+            let encoded = frame.encode();
+            write_frame_until(stream, &encoded, Instant::now() + timeout)?;
+        } else if subscription.is_detached() {
+            return Err(IpcError::TerminalDetached);
+        }
+    }
 }
 
 fn write_response<T: Serialize>(

@@ -15,11 +15,13 @@ use std::io;
 use muxyard_contracts::ApiError;
 use thiserror::Error;
 
-pub use client::IpcClient;
+pub use client::{IpcClient, TerminalStream};
 pub use frame::{MAX_FRAME_BYTES, read_frame, write_frame};
 pub(crate) use frame::{read_frame_until, write_frame_until};
 pub use server::{IpcOptions, IpcServer};
-pub use types::{HOST_STATUS_METHOD, HostStatusRequest, HostStatusResponse, IpcResponse};
+pub use types::{
+    HOST_STATUS_METHOD, HostStatusRequest, HostStatusResponse, IpcResponse, TERMINAL_ATTACH_METHOD,
+};
 
 /// Local transport, framing, or dispatch failure.
 #[derive(Debug, Error)]
@@ -63,4 +65,13 @@ pub enum IpcError {
     /// A control envelope could not be encoded or decoded.
     #[error("local IPC control payload is invalid")]
     Json(#[from] serde_json::Error),
+    /// A terminal binary frame is invalid.
+    #[error(transparent)]
+    TerminalFrame(#[from] muxyard_terminal::TerminalFrameError),
+    /// A terminal subscriber fell behind and was detached.
+    #[error("terminal subscriber fell behind")]
+    TerminalDetached,
+    /// A terminal stream response did not match its subscription.
+    #[error("terminal stream protocol is invalid")]
+    TerminalProtocol,
 }

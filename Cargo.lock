@@ -1951,6 +1951,7 @@ dependencies = [
  "interprocess",
  "muxyard-contracts",
  "muxyard-platform",
+ "muxyard-terminal",
  "nix",
  "serde",
  "serde_json",
@@ -1984,6 +1985,15 @@ dependencies = [
  "sha2",
  "tempfile",
  "thiserror 2.0.21",
+]
+
+[[package]]
+name = "muxyard-terminal"
+version = "0.1.0"
+dependencies = [
+ "serde",
+ "thiserror 2.0.21",
+ "uuid",
 ]
 
 [[package]]

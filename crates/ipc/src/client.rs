@@ -9,12 +9,15 @@ use interprocess::local_socket::GenericNamespaced;
 use interprocess::local_socket::prelude::*;
 use muxyard_contracts::{ControlEnvelope, ControlMessageType, Id, ProtocolVersion, decode_control};
 use muxyard_platform::PlatformPaths;
+use muxyard_terminal::{
+    TerminalAttachRequest, TerminalAttachResponse, TerminalFrame, TerminalSequence,
+};
 use serde::{Serialize, de::DeserializeOwned};
 use uuid::Uuid;
 
 use crate::{
     HOST_STATUS_METHOD, HostStatusRequest, HostStatusResponse, IpcError, IpcResponse,
-    read_frame_until, write_frame_until,
+    TERMINAL_ATTACH_METHOD, read_frame_until, write_frame_until,
 };
 
 /// Connected local control client.
@@ -76,6 +79,62 @@ impl IpcClient {
             IpcResponse::Ok { data } => Ok(data),
             IpcResponse::Error { error } => Err(IpcError::Api(error)),
         }
+    }
+
+    /// Attach this connection to a terminal stream and switch it to binary frames.
+    pub fn attach_terminal(
+        mut self,
+        stream_id: Uuid,
+        queue_bytes: Option<u32>,
+    ) -> Result<TerminalStream, IpcError> {
+        let response: IpcResponse<TerminalAttachResponse> = self.request(
+            TERMINAL_ATTACH_METHOD,
+            TerminalAttachRequest {
+                stream_id,
+                queue_bytes,
+            },
+        )?;
+        match response {
+            IpcResponse::Ok { data } => {
+                if data.stream_id != stream_id {
+                    return Err(IpcError::TerminalProtocol);
+                }
+                Ok(TerminalStream {
+                    stream: self.stream,
+                    timeout: self.timeout,
+                    stream_id,
+                    sequence: TerminalSequence::starting_at(data.next_sequence),
+                })
+            }
+            IpcResponse::Error { error } => Err(IpcError::Api(error)),
+        }
+    }
+}
+
+/// A connection switched to one terminal stream after `terminal.attach`.
+pub struct TerminalStream {
+    stream: LocalSocketStream,
+    timeout: Duration,
+    stream_id: Uuid,
+    sequence: TerminalSequence,
+}
+
+impl TerminalStream {
+    /// Stream identifier.
+    pub fn stream_id(&self) -> Uuid {
+        self.stream_id
+    }
+
+    /// Read the next terminal frame, enforcing stream and sequence identity.
+    pub fn next_frame(&mut self) -> Result<TerminalFrame, IpcError> {
+        let frame = read_frame_until(&mut self.stream, Instant::now() + self.timeout)?
+            .ok_or(IpcError::Closed)?;
+        let frame = TerminalFrame::decode(&frame)?;
+        if frame.stream_id() != self.stream_id {
+            return Err(IpcError::TerminalProtocol);
+        }
+        self.sequence.accept(frame.sequence())?;
+        Ok(frame)
     }
 }
 

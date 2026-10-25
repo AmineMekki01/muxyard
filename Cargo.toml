@@ -7,6 +7,7 @@ members = [
     "crates/ipc",
     "crates/platform",
     "crates/storage",
+    "crates/terminal",
 ]
 resolver = "2"
 
@@ -22,6 +23,7 @@ muxyard-contracts = { path = "crates/contracts" }
 muxyard-ipc = { path = "crates/ipc" }
 muxyard-platform = { path = "crates/platform" }
 muxyard-storage = { path = "crates/storage" }
+muxyard-terminal = { path = "crates/terminal" }
 ctrlc = { version = "3.5.2", features = ["termination"] }
 interprocess = "2.4.7"
 nix = { version = "0.31.3", features = ["user"] }

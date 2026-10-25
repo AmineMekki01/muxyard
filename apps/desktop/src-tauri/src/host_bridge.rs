@@ -267,7 +267,10 @@ fn map_ipc(error: IpcError) -> ApiError {
         | IpcError::TruncatedFrame
         | IpcError::InvalidFrame
         | IpcError::Protocol
-        | IpcError::Json(_) => internal("The local host returned an invalid response."),
+        | IpcError::Json(_)
+        | IpcError::TerminalFrame(_)
+        | IpcError::TerminalDetached
+        | IpcError::TerminalProtocol => internal("The local host returned an invalid response."),
         IpcError::UnsupportedPlatform => {
             internal("Local host IPC is unsupported on this platform.")
         }
