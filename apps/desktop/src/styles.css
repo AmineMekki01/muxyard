@@ -1,0 +1,138 @@
+@import "tailwindcss";
+
+:root {
+  font-family: "Avenir Next", "Segoe UI Variable", "Cantarell", sans-serif;
+  color: #263b43;
+  background: #eff2f3;
+  font-synthesis: none;
+  text-rendering: optimizeLegibility;
+  --surface: #f9fbfb;
+  --line: #d9e1e4;
+  --muted: #586e78;
+  --accent: #376c7d;
+  --utility-font:
+    "SFMono-Regular", "Cascadia Code", "Liberation Mono", monospace;
+}
+
+* {
+  box-sizing: border-box;
+}
+
+body {
+  margin: 0;
+  min-width: 320px;
+}
+
+.workspace {
+  display: grid;
+  grid-template-rows: auto 1fr auto;
+  min-height: 100svh;
+}
+
+.workspace-header,
+.workspace-footer {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 16px;
+  padding: 20px 28px;
+  background: var(--surface);
+}
+
+.workspace-header {
+  border-bottom: 1px solid var(--line);
+}
+
+.wordmark {
+  display: inline-flex;
+  align-items: center;
+  gap: 12px;
+  font-size: 18px;
+  font-weight: 600;
+  letter-spacing: -0.5px;
+}
+
+.yard-mark {
+  display: flex;
+  align-items: center;
+  gap: 3px;
+  width: 24px;
+  height: 24px;
+  transform: skewY(-18deg);
+}
+
+.yard-mark i {
+  width: 5px;
+  height: 15px;
+  background: var(--accent);
+}
+
+.yard-mark i:nth-child(2) {
+  height: 24px;
+}
+
+.build-label,
+.workspace-footer,
+.eyebrow {
+  font-family: var(--utility-font);
+  font-size: 11px;
+  color: var(--muted);
+}
+
+.empty-workspace {
+  display: grid;
+  place-items: center;
+  padding: 64px 28px;
+  background: radial-gradient(ellipse at 50% 45%, #fbfdfd, #eff2f3 70%);
+}
+
+.empty-content {
+  max-width: 430px;
+  text-align: center;
+}
+
+.eyebrow {
+  margin: 0 0 18px;
+  letter-spacing: 1.5px;
+  text-transform: uppercase;
+}
+
+h1 {
+  margin: 0;
+  font-size: clamp(30px, 5vw, 40px);
+  font-weight: 500;
+  letter-spacing: -1.4px;
+  line-height: 1.2;
+}
+
+.empty-description {
+  margin: 16px 0 36px;
+  font-size: 16px;
+  color: var(--muted);
+}
+
+.scope-note {
+  margin: 0;
+  padding-top: 24px;
+  border-top: 1px solid var(--line);
+  font-size: 13px;
+  line-height: 1.7;
+  color: var(--muted);
+}
+
+.workspace-footer {
+  border-top: 1px solid var(--line);
+  padding-block: 12px;
+}
+
+@media (max-width: 480px) {
+  .workspace-header,
+  .workspace-footer {
+    padding-inline: 16px;
+  }
+
+  .build-label {
+    max-width: 100px;
+    text-align: right;
+  }
+}

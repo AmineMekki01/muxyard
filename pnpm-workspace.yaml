@@ -1,0 +1,6 @@
+packages:
+  - apps/desktop
+  - apps/remote-web
+  - packages/*
+
+strictPeerDependencies: true
