@@ -1,0 +1,146 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  CARGO_TERM_COLOR: always
+  RUST_BACKTRACE: "1"
+
+jobs:
+  checks:
+    name: checks (${{ matrix.os }})
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 45
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [macos-latest, ubuntu-latest, windows-latest]
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+        with:
+          persist-credentials: false
+      - name: Install Linux native dependencies
+        if: runner.os == 'Linux'
+        run: |
+          sudo apt-get update
+          sudo apt-get install --yes --no-install-recommends \
+            build-essential \
+            curl \
+            file \
+            libayatana-appindicator3-dev \
+            librsvg2-dev \
+            libssl-dev \
+            libwebkit2gtk-4.1-dev \
+            libxdo-dev \
+            patchelf \
+            wget
+      - name: Install pnpm
+        uses: pnpm/action-setup@fc06bc1257f339d1d5d8b3a19a8cae5388b55320 # v4.4.0
+        with:
+          version: 12.15.0
+          run_install: false
+      - name: Install Node.js
+        uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
+        with:
+          node-version: 24
+          cache: pnpm
+          cache-dependency-path: pnpm-lock.yaml
+      - name: Install Rust
+        uses: dtolnay/rust-toolchain@b725eda525362e7cf34af9a7243cac1e3f01a7ec # stable
+        with:
+          toolchain: 1.99.1
+          components: rustfmt, clippy
+      - name: Cache Rust artifacts
+        uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2.9.3
+        with:
+          cache-on-failure: true
+      - name: Install JavaScript dependencies
+        run: pnpm install --frozen-lockfile
+      - name: Record platform report
+        run: node scripts/ci/platform-report.mjs --output target/ci/platform-report.json
+      - name: Check Rust formatting
+        run: cargo fmt --check
+      - name: Lint Rust
+        run: cargo clippy --locked --workspace --all-targets --all-features -- -D warnings
+      - name: Test Rust
+        run: cargo test --locked --workspace
+      - name: Test contract generation feature
+        run: cargo test --locked -p muxyard-contracts --all-features
+      - name: Check TypeScript formatting
+        run: pnpm format:check
+      - name: Lint TypeScript
+        run: pnpm lint
+      - name: Typecheck TypeScript
+        run: pnpm typecheck
+      - name: Test TypeScript
+        run: pnpm test
+      - name: Check generated contracts
+        run: pnpm contracts:check
+      - name: Build JavaScript clients
+        run: pnpm build
+      - name: Build Rust workspace
+        run: cargo build --locked --workspace
+      - name: Upload platform report
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: platform-report-${{ matrix.os }}
+          path: target/ci/platform-report.json
+          if-no-files-found: warn
+          retention-days: 14
+
+  licenses:
+    name: dependency and license report
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+        with:
+          persist-credentials: false
+      - name: Install pnpm
+        uses: pnpm/action-setup@fc06bc1257f339d1d5d8b3a19a8cae5388b55320 # v4.4.0
+        with:
+          version: 12.15.0
+          run_install: false
+      - name: Install Node.js
+        uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
+        with:
+          node-version: 24
+          cache: pnpm
+          cache-dependency-path: pnpm-lock.yaml
+      - name: Install Rust
+        uses: dtolnay/rust-toolchain@b725eda525362e7cf34af9a7243cac1e3f01a7ec # stable
+        with:
+          toolchain: 1.99.1
+      - name: Install JavaScript dependencies
+        run: pnpm install --frozen-lockfile
+      - name: Check workflow safety
+        run: node scripts/ci/workflow-safety.mjs --workflows .github/workflows
+      - name: Generate dependency metadata
+        run: |
+          mkdir -p target/ci/licenses
+          cargo metadata --locked --format-version 1 > target/ci/cargo-metadata.json
+          pnpm licenses list --json > target/ci/pnpm-licenses.json
+      - name: Generate license report
+        run: node scripts/ci/license-report.mjs --cargo target/ci/cargo-metadata.json --npm target/ci/pnpm-licenses.json --output target/ci/licenses --fail-on-unknown
+      - name: Upload license report
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: license-report
+          path: target/ci/licenses
+          if-no-files-found: warn
+          retention-days: 14

@@ -103,6 +103,43 @@ commands for the desktop need the platform's native Tauri libraries.
 Rust/TypeScript lockfiles must be checked into the eventual authorized commit.
 Never regenerate dependencies implicitly in CI.
 
+## Continuous Integration
+
+`.github/workflows/ci.yml` runs on pushes to `main`, pull requests, and manual
+dispatch. A macOS/Linux/Windows matrix installs from the frozen pnpm lockfile and
+runs Rust formatting, Clippy, tests, TypeScript formatting/lint/typecheck/tests,
+contract generation checks, and both client and Rust workspace builds. Matrix
+failures do not cancel other platforms.
+
+A separate job produces dependency license artifacts from `cargo metadata` and
+`pnpm licenses list`. First-party unpublished workspace packages are listed
+separately; unknown third-party licenses fail the job. The workflow also runs a
+static safety check that rejects persisted checkout credentials, repository
+secret or token references, write permissions, silently tolerated failures,
+shell tracing, downloaded-content piping, unpinned remote actions, and workflows
+that omit any of the three platforms. Actions are pinned to immutable commits, caches are keyed by the
+lockfiles, and reports are uploaded as short-lived artifacts. `.gitattributes`
+normalizes text to LF so Windows formatting checks match the other platforms.
+
+Local equivalents:
+
+```sh
+mkdir -p target/ci/licenses
+cargo metadata --locked --format-version 1 > target/ci/cargo-metadata.json
+pnpm licenses list --json > target/ci/pnpm-licenses.json
+node scripts/ci/license-report.mjs \
+  --cargo target/ci/cargo-metadata.json \
+  --npm target/ci/pnpm-licenses.json \
+  --output target/ci/licenses \
+  --fail-on-unknown
+node scripts/ci/workflow-safety.mjs --workflows .github/workflows
+node scripts/ci/platform-report.mjs --output target/ci/platform-report.json
+```
+
+The workflow is configured for hosted macOS, Linux, and Windows runners. Hosted
+runner results are available only after the workflow is pushed; local macOS
+checks and workflow syntax validation do not substitute for those reports.
+
 ## Shared Contracts
 
 Rust in `crates/contracts` is the source of truth. Change DTOs there, then run:
@@ -151,4 +188,6 @@ also requires the pinned Rust toolchain. Shared JSON fixtures live in
 - `crates/storage`: SQLite connection policy, checksummed migrations, and host records.
 - `packages/contracts`: generated TypeScript declarations and roundtrip tests.
 - `scripts`: toolchain diagnostics and contract generation/check commands.
+- `scripts/ci`: license, platform, and workflow safety checks used by CI.
+- `.github/workflows`: the three-platform CI matrix and report jobs.
 - `tests/fixtures/contracts`: shared wire compatibility and failure fixtures.
