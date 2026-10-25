@@ -6,10 +6,12 @@ A fast, collaborative development terminal for coding with Claude Code, Codex, a
 
 ## Implementation Status
 
-The current build provides the application foundation and shared wire contracts,
-not a working terminal or agent runtime. The desktop displays an empty workspace. `muxyard-host` reports its
-version or help and exits without starting a daemon, socket, database, child
-process, or HTTP service. The remote-web package is an unconnected placeholder.
+The current build provides the application foundation, shared wire contracts, and
+a one-shot local storage initializer, not a working terminal or agent runtime. The
+desktop displays an empty workspace. `muxyard-host --version` and `--help` exit
+without starting a daemon, socket, database, child process, or HTTP service.
+`muxyard-host --init` creates private per-user configuration, logs, and a migrated
+SQLite database, then exits. The remote-web package is an unconnected placeholder.
 
 ## Prerequisites
 
@@ -21,7 +23,8 @@ process, or HTTP service. The remote-web package is an unconnected placeholder.
   (`. "$HOME/.cargo/env"` in the current shell).
 - Native Tauri 2 prerequisites: Apple Command Line Tools on macOS; MSVC C++
   Build Tools and WebView2 on Windows; WebKitGTK 4.1 and the Tauri native packages
-  on Ubuntu. See the [official prerequisite guide](https://v2.tauri.app/start/prerequisites/).
+  on Ubuntu. The host's bundled SQLite also needs a working C compiler. See the
+  [official prerequisite guide](https://v2.tauri.app/start/prerequisites/).
 
 Run `node scripts/doctor.mjs` to diagnose missing tools without requiring pnpm.
 No installer, elevation, or network service runs automatically.
@@ -45,9 +48,34 @@ ports. No production server or public listener is started.
 ```sh
 cargo run --locked -p muxyard-host -- --version
 cargo run --locked -p muxyard-host -- --help
+cargo run --locked -p muxyard-host -- --init
 ```
 
 Unsupported host flags return exit 2. No arguments print scaffold help and exit.
+`--init` is a one-shot bootstrap, not the persistent host runtime.
+
+## Local Storage Foundation
+
+`--init` resolves OS-standard per-user locations, creates them with owner-only
+permissions on Unix, writes `config.json` only when it is absent, and opens
+`muxyard.sqlite3` with foreign keys enabled, WAL journaling, a busy timeout, and
+ordered transactional migrations. A checksum mismatch, malformed configuration,
+or newer database schema blocks initialization instead of overwriting data. A
+failed migration rolls back its transaction and leaves earlier schema versions
+usable.
+
+The default configuration selects JSON logs and bounded resource defaults. Logs
+are append-only under the data directory and use an explicit `Sensitive` wrapper
+for values that must be redacted. No configuration contents, room text, terminal
+output, or credentials are logged.
+
+Absolute `MUXYARD_DATA_DIR`, `MUXYARD_CONFIG_DIR`, and `MUXYARD_RUNTIME_DIR`
+environment overrides select isolated locations for development and tests. On
+macOS the default data directory is
+`~/Library/Application Support/Muxyard`; Linux follows the XDG data, config, and
+runtime conventions; Windows uses the local and roaming application-data
+directories. Windows file ACL hardening is not implemented, and native path
+behavior is not verified on this machine.
 
 ## Checks And Builds
 
@@ -119,6 +147,8 @@ also requires the pinned Rust toolchain. Shared JSON fixtures live in
 - `apps/remote-web`: static, unconnected React/Vite client scaffold.
 - `crates/core`: UI-independent native foundation.
 - `crates/contracts`: authoritative DTOs, bounded JSON decoder, and code generator.
+- `crates/platform`: per-user paths, validated configuration, and secret-safe logging.
+- `crates/storage`: SQLite connection policy, checksummed migrations, and host records.
 - `packages/contracts`: generated TypeScript declarations and roundtrip tests.
 - `scripts`: toolchain diagnostics and contract generation/check commands.
 - `tests/fixtures/contracts`: shared wire compatibility and failure fixtures.
