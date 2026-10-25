@@ -4,6 +4,7 @@ mod config;
 mod logging;
 mod paths;
 mod process;
+mod shell;
 
 use std::{io, path::PathBuf};
 
@@ -18,6 +19,7 @@ pub use paths::{
 pub use process::{
     ProcessIdentity, configure_detached, current_process_identity, process_identity,
 };
+pub use shell::{resolve_shell, validate_working_directory};
 
 /// A failure while resolving or securing per-user filesystem locations.
 #[derive(Debug, thiserror::Error)]
@@ -55,6 +57,12 @@ pub enum PlatformError {
     /// Process identity or detachment setup failed.
     #[error("process operation failed: {0}")]
     Process(String),
+    /// A shell executable is missing, relative, or not executable.
+    #[error("shell executable is unavailable: {0}")]
+    ShellUnavailable(PathBuf),
+    /// A working directory is missing or is not a directory.
+    #[error("working directory is unavailable: {0}")]
+    InvalidWorkingDirectory(PathBuf),
 }
 
 pub(crate) fn io_error(path: &std::path::Path, source: io::Error) -> PlatformError {

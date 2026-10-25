@@ -16,10 +16,11 @@ manage the current user's host. The host opens private per-user configuration,
 logs, and a migrated SQLite database, and serves typed `host.status` requests
 over a Unix socket or Windows named pipe. The desktop bridge auto-launches the
 host when absent, checks protocol compatibility, and watches status without
-exposing the raw endpoint to the webview. Binary terminal stream framing and
-bounded per-client backpressure are implemented as transport primitives; a PTY
-and terminal UI are not yet wired. It does not yet expose an agent or an HTTP
-service. The remote-web package is an unconnected placeholder.
+exposing the raw endpoint to the webview. Native PTY lifecycle, binary terminal
+stream framing, and bounded per-client backpressure are implemented as Rust
+primitives; the desktop terminal UI and IPC spawn/input commands are not yet
+wired. It does not yet expose an agent or an HTTP service. The remote-web
+package is an unconnected placeholder.
 
 ## Prerequisites
 
@@ -119,8 +120,10 @@ Terminal output uses a typed `terminal.attach` request followed by binary frames
 on that connection. Frames carry a stream UUID, monotonic sequence, kind, and up
 to 64 KiB of payload. Each attached client has a bounded 1–4 MiB write queue; a
 slow subscriber is detached without blocking other subscribers or the control
-listener. The codec defines input, resize, end, flow-control, and ACK kinds, but
-actual PTY input and credit wiring remain future terminal work.
+listener. The codec defines input, resize, end, flow-control, and ACK kinds.
+Native PTY sessions can write input, resize, kill, and report exit status through
+`crates/terminal`; IPC spawn/input commands and credit wiring remain future
+terminal work.
 
 The Tauri Rust bridge exposes typed `host_connect`, `host_status`,
 `host_watch`, and `host_unwatch` commands. It checks protocol version 1, shows
@@ -318,7 +321,7 @@ also requires the pinned Rust toolchain. Shared JSON fixtures live in
 - `crates/core`: UI-independent native foundation.
 - `crates/contracts`: authoritative DTOs, bounded JSON decoder, and code generator.
 - `crates/ipc`: protected local socket/named-pipe transport, typed `host.status` client, and framing.
-- `crates/terminal`: terminal binary frame codec, bounded per-client queues, and slow-subscriber detachment.
+- `crates/terminal`: native PTY sessions, terminal binary frame codec, bounded per-client queues, and slow-subscriber detachment.
 - `crates/platform`: per-user paths, validated configuration, and secret-safe logging.
 - `crates/storage`: SQLite connection policy, checksummed migrations, and host records.
 - `packages/contracts`: generated TypeScript declarations and roundtrip tests.

@@ -259,6 +259,17 @@ impl From<PlatformError> for ConfigError {
                 path: PathBuf::new(),
                 source: io::Error::other(message),
             },
+            PlatformError::ShellUnavailable(path) => Self::Io {
+                path,
+                source: io::Error::new(io::ErrorKind::NotFound, "shell is unavailable"),
+            },
+            PlatformError::InvalidWorkingDirectory(path) => Self::Io {
+                path,
+                source: io::Error::new(
+                    io::ErrorKind::InvalidInput,
+                    "working directory is unavailable",
+                ),
+            },
         }
     }
 }
