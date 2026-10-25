@@ -170,6 +170,29 @@ reparented to `launchd` are attributed on a best-effort basis by start time.
 The harness terminates the launched desktop process tree and reports orphan
 processes. Baseline numbers are descriptive, not target-compliance claims.
 
+## Keyboard And Focus
+
+The desktop shell supports local navigation without a host connection:
+
+- `Cmd/Ctrl+Shift+P` opens the command palette.
+- `?` opens the keyboard reference.
+- `Escape` closes an open overlay and restores the previous focus.
+- Sidebar and inspector toggle buttons expose `aria-expanded`; both regions are
+  programmatically focusable.
+- `Tab`/`Shift+Tab` stay inside an open overlay. Focus returns to the trigger
+  after the overlay closes.
+
+The global shortcut listener ignores focused inputs, textareas, selects,
+`contenteditable` regions, `.xterm`, `[role="terminal"]`, and
+`[data-terminal-focus="true"]`. It never handles `Ctrl+C`, `Ctrl+D`, `Ctrl+Z`,
+`Escape`, mouse reporting, or Alt sequences on behalf of a terminal. The command
+palette contains only local layout, focus, and help actions; unknown queries do
+nothing privileged.
+
+The shell uses in-memory layout state and does not persist preferences yet. The
+responsive breakpoints stack the main workspace, sidebar, and inspector on
+narrow windows; native resize verification remains a manual smoke test.
+
 ## Shared Contracts
 
 Rust in `crates/contracts` is the source of truth. Change DTOs there, then run:

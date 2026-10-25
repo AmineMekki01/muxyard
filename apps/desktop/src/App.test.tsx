@@ -3,17 +3,25 @@ import { describe, expect, it } from "vitest";
 
 import { App } from "./App";
 
-describe("foundation workspace", () => {
-  it("renders an original empty workspace with honest connection state", () => {
+describe("workspace shell", () => {
+  it("renders the shell with honest host and empty states", () => {
     const html = renderToStaticMarkup(<App />);
     expect(html).toContain("<h1>No project open</h1>");
     expect(html).toContain("Host not connected");
-    expect(html).toContain("Development scaffold");
+    expect(html).toContain("Remote off");
+    expect(html).toContain("No pending attention");
+    expect(html).toContain("Not run");
+    expect(html).toContain("Command palette");
     expect(html).toContain("not connected yet");
+    expect(html).toContain("no AI backend is required");
   });
 
-  it("offers no pretend terminal, project, or remote actions", () => {
+  it("offers only local shell controls, not pretend terminal surfaces", () => {
     const html = renderToStaticMarkup(<App />);
-    expect(html).not.toMatch(/<(button|input|iframe|canvas)\b/);
+    expect(html).toContain('aria-label="Hide sidebar"');
+    expect(html).toContain('aria-label="Hide inspector"');
+    expect(html).toContain('aria-haspopup="dialog"');
+    expect(html).not.toMatch(/<(iframe|canvas)\b/);
+    expect(html).not.toMatch(/terminal is ready|agent is running/i);
   });
 });
