@@ -16,7 +16,10 @@ tauri-build.workspace = true
 muxyard-contracts.workspace = true
 muxyard-ipc.workspace = true
 muxyard-platform.workspace = true
+muxyard-terminal.workspace = true
+serde.workspace = true
 tauri.workspace = true
+uuid.workspace = true
 
 [dev-dependencies]
 serde_json.workspace = true

@@ -21,6 +21,7 @@ pub(crate) use frame::{read_frame_until, write_frame_until};
 pub use server::{IpcOptions, IpcServer};
 pub use types::{
     HOST_STATUS_METHOD, HostStatusRequest, HostStatusResponse, IpcResponse, TERMINAL_ATTACH_METHOD,
+    TERMINAL_CLOSE_METHOD, TERMINAL_INPUT_METHOD, TERMINAL_RESIZE_METHOD, TERMINAL_SPAWN_METHOD,
 };
 
 /// Local transport, framing, or dispatch failure.

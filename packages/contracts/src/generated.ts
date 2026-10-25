@@ -119,6 +119,81 @@ export type HostStatusEvent =
       error: ApiError;
     };
 
+export type TerminalSpawnRequest = {
+  /**
+   * Working directory; omitted means the host process directory.
+   */
+  cwd: string | null;
+  /**
+   * Optional explicit shell executable.
+   */
+  shell: string | null;
+  /**
+   * Initial rows.
+   */
+  rows: number;
+  /**
+   * Initial columns.
+   */
+  cols: number;
+};
+
+export type TerminalSpawnResponse = {
+  /**
+   * Stream/session identifier.
+   */
+  stream_id: Id;
+  /**
+   * Resolved shell executable.
+   */
+  shell: string;
+  /**
+   * Canonical working directory.
+   */
+  cwd: string;
+  /**
+   * Initial rows.
+   */
+  rows: number;
+  /**
+   * Initial columns.
+   */
+  cols: number;
+};
+
+export type TerminalInputRequest = {
+  /**
+   * Target stream/session.
+   */
+  stream_id: Id;
+  /**
+   * Terminal input text.
+   */
+  data: string;
+};
+
+export type TerminalResizeRequest = {
+  /**
+   * Target stream/session.
+   */
+  stream_id: Id;
+  /**
+   * Rows.
+   */
+  rows: number;
+  /**
+   * Columns.
+   */
+  cols: number;
+};
+
+export type TerminalCloseRequest = {
+  /**
+   * Target stream/session.
+   */
+  stream_id: Id;
+};
+
 export type ExecutionEnvironment =
   | { kind: "native-mac" }
   | { kind: "native-linux" }

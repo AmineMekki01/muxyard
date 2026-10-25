@@ -7,11 +7,16 @@ mod control;
 mod errors;
 mod host;
 mod models;
+mod terminal;
 
 pub use control::{ControlEnvelope, ControlMessageType, decode_control};
 pub use errors::{ApiError, ErrorCode};
 pub use host::{HostStatusEvent, HostStatusRequest, HostStatusResponse};
 pub use models::{AgentStatus, ExecutionEnvironment, Id, TaskState};
+pub use terminal::{
+    TerminalCloseRequest, TerminalInputRequest, TerminalResizeRequest, TerminalSpawnRequest,
+    TerminalSpawnResponse,
+};
 
 use serde::{Deserialize, Deserializer, Serialize, Serializer, de};
 

@@ -22,6 +22,7 @@ use muxyard_storage::{
     Database, DatabaseOptions, HostInstance, HostState, mark_stale_terminal_sessions,
     reconcile_stale_host_instances, record_host_instance, update_host_instance_state,
 };
+use muxyard_terminal::{TerminalHub, TerminalLimits, TerminalService};
 use uuid::Uuid;
 
 use crate::{
@@ -80,6 +81,7 @@ pub struct HostRuntime {
     instance_id: String,
     stop: Arc<AtomicBool>,
     ipc: IpcServer,
+    terminal: Arc<TerminalService>,
 }
 
 impl HostRuntime {
@@ -124,7 +126,10 @@ impl HostRuntime {
             #[cfg(windows)]
             tracing::warn!(%error, "console signal handler unavailable; stop marker remains active");
         }
-        let ipc = IpcServer::start(
+        let terminal = Arc::new(TerminalService::new(Arc::new(TerminalHub::new(
+            TerminalLimits::default(),
+        )?)));
+        let ipc = IpcServer::start_with_terminal_service(
             &paths,
             HostStatusResponse {
                 host_version: env!("CARGO_PKG_VERSION").to_string(),
@@ -135,6 +140,7 @@ impl HostRuntime {
                 started_ms: lock.info().started_ms,
                 ready: true,
             },
+            Arc::clone(&terminal),
         )?;
         write_ready_marker(&paths.host_ready_path(), lock.info())?;
 
@@ -152,6 +158,7 @@ impl HostRuntime {
             instance_id,
             stop,
             ipc,
+            terminal,
         })
     }
 
@@ -164,6 +171,7 @@ impl HostRuntime {
             instance_id,
             stop,
             mut ipc,
+            terminal,
         } = self;
         let mut last_heartbeat = Instant::now();
         let reason = loop {
@@ -194,6 +202,7 @@ impl HostRuntime {
 
         tracing::info!(reason, "host stopping");
         ipc.stop();
+        terminal.close_all();
         let mut result = Ok(());
         if let Err(error) = update_host_instance_state(
             database.connection(),

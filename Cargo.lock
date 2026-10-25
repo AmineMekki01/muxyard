@@ -1942,10 +1942,13 @@ dependencies = [
  "muxyard-contracts",
  "muxyard-ipc",
  "muxyard-platform",
+ "muxyard-terminal",
+ "serde",
  "serde_json",
  "tauri",
  "tauri-build",
  "tempfile",
+ "uuid",
 ]
 
 [[package]]
@@ -1958,6 +1961,7 @@ dependencies = [
  "muxyard-ipc",
  "muxyard-platform",
  "muxyard-storage",
+ "muxyard-terminal",
  "rusqlite",
  "serde",
  "serde_json",
@@ -2014,6 +2018,7 @@ dependencies = [
 name = "muxyard-terminal"
 version = "0.1.0"
 dependencies = [
+ "muxyard-contracts",
  "muxyard-platform",
  "nix 0.31.3",
  "portable-pty",

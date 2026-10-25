@@ -59,6 +59,9 @@ pub enum HostError {
     /// The protected local control endpoint failed.
     #[error(transparent)]
     Ipc(#[from] muxyard_ipc::IpcError),
+    /// Terminal stream limits could not be initialized.
+    #[error(transparent)]
+    Terminal(#[from] muxyard_terminal::TerminalHubError),
     /// The operating-system user name is unavailable.
     #[error("operating-system user name is not available")]
     MissingOsUser,

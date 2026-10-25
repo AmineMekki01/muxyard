@@ -4,6 +4,7 @@ import { useEffect, useState } from "react";
 
 import { useHostConnection } from "../ipc/useHostConnection";
 import { hostStatusDetail } from "../ipc/host";
+import { TerminalPane } from "../modules/terminal/TerminalPane";
 import { CommandPalette } from "../ui/CommandPalette";
 import { HostBanner, HostStatusPill } from "../ui/HostStatus";
 import { ShortcutHelp } from "../ui/ShortcutHelp";
@@ -174,34 +175,39 @@ export function AppShell() {
           onFocus={() => setActiveRegion("main")}
         >
           <HostBanner state={hostState} onReconnect={reconnect} />
-          <div className="empty-content">
-            <p className="eyebrow">Your workspace</p>
-            <h1>No project open</h1>
-            <p className="empty-description">
-              A clear space for your next build.
-            </p>
-            <div className="empty-actions">
-              <button
-                type="button"
-                className="primary-button"
-                onClick={() => setPaletteOpen(true)}
-              >
-                Open command palette
-              </button>
-              <button
-                type="button"
-                className="secondary-button"
-                onClick={() => setHelpOpen(true)}
-              >
-                Keyboard shortcuts
-              </button>
+          {hostState.kind === "connected" ||
+          hostState.kind === "reconnecting" ? (
+            <TerminalPane />
+          ) : (
+            <div className="empty-content">
+              <p className="eyebrow">Your workspace</p>
+              <h1>No project open</h1>
+              <p className="empty-description">
+                A clear space for your next build.
+              </p>
+              <div className="empty-actions">
+                <button
+                  type="button"
+                  className="primary-button"
+                  onClick={() => setPaletteOpen(true)}
+                >
+                  Open command palette
+                </button>
+                <button
+                  type="button"
+                  className="secondary-button"
+                  onClick={() => setHelpOpen(true)}
+                >
+                  Keyboard shortcuts
+                </button>
+              </div>
+              <p className="scope-note">
+                Project registration, agents, and remote access are not
+                connected yet. The local terminal is available when the host is
+                ready.
+              </p>
             </div>
-            <p className="scope-note">
-              Project registration, terminals, agents, and remote access are not
-              connected yet. The host connection is local and no AI backend is
-              required.
-            </p>
-          </div>
+          )}
         </main>
 
         {inspectorOpen ? (

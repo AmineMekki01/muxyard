@@ -142,6 +142,31 @@ fn server_stop_closes_an_active_terminal_stream() {
 }
 
 #[test]
+fn idle_terminal_stream_waits_for_later_output() {
+    let (_temp, paths) = test_paths();
+    let hub = Arc::new(TerminalHub::new(TerminalLimits::default()).unwrap());
+    let stream_id = hub.create_session().unwrap();
+    let mut server = start_server(&paths, Arc::clone(&hub), Duration::from_millis(100));
+    let mut terminal = IpcClient::connect_with_timeout(&paths, Duration::from_millis(100))
+        .unwrap()
+        .attach_terminal(stream_id, None)
+        .unwrap();
+
+    let reader = thread::spawn(move || {
+        let frame = terminal.next_frame();
+        (terminal, frame)
+    });
+    thread::sleep(Duration::from_millis(250));
+    hub.publish(stream_id, b"late-output").unwrap();
+    let (terminal, frame) = reader.join().unwrap();
+    let frame = frame.expect("idle stream must keep waiting for output");
+    assert_eq!(frame.payload(), b"late-output");
+
+    drop(terminal);
+    server.stop();
+}
+
+#[test]
 fn terminal_attach_rejects_an_out_of_bounds_queue() {
     let (_temp, paths) = test_paths();
     let hub = Arc::new(TerminalHub::new(TerminalLimits::default()).unwrap());

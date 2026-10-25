@@ -14,10 +14,14 @@ use std::{
 
 use muxyard_contracts::{
     ApiError, ErrorCode, HostStatusEvent, HostStatusResponse, PROTOCOL_VERSION,
+    TerminalCloseRequest, TerminalInputRequest, TerminalResizeRequest, TerminalSpawnRequest,
+    TerminalSpawnResponse,
 };
-use muxyard_ipc::{IpcClient, IpcError};
+use muxyard_ipc::{IpcClient, IpcError, IpcResponse, TerminalStream};
 use muxyard_platform::PlatformPaths;
+use serde::{Serialize, de::DeserializeOwned};
 use tauri::ipc::Channel;
+use uuid::Uuid;
 
 /// Time bounds used while attaching to and watching a host.
 #[derive(Debug, Clone, Copy)]
@@ -149,6 +153,48 @@ impl HostBridge {
     /// Read status without launching a host.
     pub(crate) fn status(&self) -> Result<HostStatusResponse, ApiError> {
         self.status_once()
+    }
+
+    /// Create a native shell session in the host.
+    pub(crate) fn terminal_spawn(
+        &self,
+        request: TerminalSpawnRequest,
+    ) -> Result<TerminalSpawnResponse, ApiError> {
+        self.request("terminal.spawn", request)
+    }
+
+    /// Write input to a host terminal session.
+    pub(crate) fn terminal_input(&self, request: TerminalInputRequest) -> Result<(), ApiError> {
+        self.request("terminal.input", request)
+    }
+
+    /// Resize a host terminal session.
+    pub(crate) fn terminal_resize(&self, request: TerminalResizeRequest) -> Result<(), ApiError> {
+        self.request("terminal.resize", request)
+    }
+
+    /// Close a host terminal session.
+    pub(crate) fn terminal_close(&self, request: TerminalCloseRequest) -> Result<(), ApiError> {
+        self.request("terminal.close", request)
+    }
+
+    /// Attach a binary output stream to a host terminal session.
+    pub(crate) fn attach_terminal(&self, stream_id: Uuid) -> Result<TerminalStream, ApiError> {
+        let client = IpcClient::connect(&self.paths).map_err(map_ipc)?;
+        client.attach_terminal(stream_id, None).map_err(map_ipc)
+    }
+
+    fn request<T: Serialize, R: DeserializeOwned>(
+        &self,
+        method: &str,
+        data: T,
+    ) -> Result<R, ApiError> {
+        let mut client = IpcClient::connect(&self.paths).map_err(map_ipc)?;
+        let response = client.request(method, data).map_err(map_ipc)?;
+        match response {
+            IpcResponse::Ok { data } => Ok(data),
+            IpcResponse::Error { error } => Err(error),
+        }
     }
 
     /// Read status, or launch a host and wait for it to become ready.
@@ -314,8 +360,10 @@ mod tests {
         time::{Duration, Instant},
     };
 
+    use muxyard_contracts::{TerminalCloseRequest, TerminalInputRequest, TerminalSpawnRequest};
     use muxyard_ipc::IpcServer;
     use muxyard_platform::PlatformPaths;
+    use muxyard_terminal::{TerminalFrameKind, TerminalHub, TerminalLimits, TerminalService};
     use tauri::ipc::InvokeResponseBody;
     use tempfile::TempDir;
 
@@ -579,6 +627,72 @@ mod tests {
             Some(HostStatusEvent::Offline { error })
                 if error.code == ErrorCode::HostOffline
         ));
+    }
+
+    #[test]
+    fn terminal_bridge_spawns_inputs_attaches_and_closes() {
+        let (_temp, paths) = paths();
+        let hub = Arc::new(TerminalHub::new(TerminalLimits::default()).unwrap());
+        let service = Arc::new(TerminalService::new(hub));
+        let mut server = IpcServer::start_with_terminal_service(
+            &paths,
+            status("terminal-bridge", 1),
+            Arc::clone(&service),
+        )
+        .unwrap();
+        let fake = Arc::new(FakeLauncher::new(paths.clone(), status("unused", 1)));
+        let bridge =
+            HostBridge::with_launcher(paths, Arc::clone(&fake) as Arc<dyn HostLauncher>, options());
+
+        let spawned = bridge
+            .terminal_spawn(TerminalSpawnRequest {
+                cwd: Some(
+                    std::env::current_dir()
+                        .unwrap()
+                        .to_string_lossy()
+                        .into_owned(),
+                ),
+                shell: Some("/bin/sh".to_string()),
+                rows: 24,
+                cols: 80,
+            })
+            .unwrap();
+        let stream_id = Uuid::parse_str(&spawned.stream_id.0).unwrap();
+        let mut terminal = bridge.attach_terminal(stream_id).unwrap();
+        bridge
+            .terminal_input(TerminalInputRequest {
+                stream_id: spawned.stream_id.clone(),
+                data: "printf 'bridge-terminal-ok\\n'\n".to_string(),
+            })
+            .unwrap();
+
+        let deadline = Instant::now() + Duration::from_secs(5);
+        let mut output = Vec::new();
+        while Instant::now() < deadline {
+            let frame = terminal.next_frame().unwrap();
+            if frame.kind() == TerminalFrameKind::Output {
+                output.extend_from_slice(frame.payload());
+                if output
+                    .windows(b"bridge-terminal-ok".len())
+                    .any(|window| window == b"bridge-terminal-ok")
+                {
+                    break;
+                }
+            }
+        }
+        assert!(
+            String::from_utf8_lossy(&output).contains("bridge-terminal-ok"),
+            "missing bridge terminal output"
+        );
+
+        bridge
+            .terminal_close(TerminalCloseRequest {
+                stream_id: spawned.stream_id,
+            })
+            .unwrap();
+        assert_eq!(service.session_count(), 0);
+        drop(terminal);
+        server.stop();
     }
 
     #[test]

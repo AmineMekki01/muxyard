@@ -8,8 +8,16 @@ use std::{
     thread,
 };
 
-use muxyard_contracts::{ApiError, HostStatusEvent, HostStatusResponse};
-use tauri::{State, ipc::Channel};
+use muxyard_contracts::{
+    ApiError, HostStatusEvent, HostStatusResponse, TerminalCloseRequest, TerminalInputRequest,
+    TerminalResizeRequest, TerminalSpawnRequest, TerminalSpawnResponse,
+};
+use muxyard_terminal::TerminalFrameKind;
+use tauri::{
+    State,
+    ipc::{Channel, InvokeResponseBody},
+};
+use uuid::Uuid;
 
 use crate::host_bridge::{HostBridge, HostBridgeOptions, internal, watch_loop};
 
@@ -81,4 +89,80 @@ pub fn host_watch(
 #[tauri::command]
 pub fn host_unwatch(state: State<'_, HostWatchState>) {
     state.stop();
+}
+
+/// Create a native shell session in the host.
+#[tauri::command]
+pub async fn terminal_spawn(
+    request: TerminalSpawnRequest,
+) -> Result<TerminalSpawnResponse, ApiError> {
+    tauri::async_runtime::spawn_blocking(move || {
+        HostBridge::for_current_user()?.terminal_spawn(request)
+    })
+    .await
+    .map_err(|_| internal("Terminal spawn task failed."))?
+}
+
+/// Write input to a host terminal session.
+#[tauri::command]
+pub async fn terminal_input(request: TerminalInputRequest) -> Result<(), ApiError> {
+    tauri::async_runtime::spawn_blocking(move || {
+        HostBridge::for_current_user()?.terminal_input(request)
+    })
+    .await
+    .map_err(|_| internal("Terminal input task failed."))?
+}
+
+/// Resize a host terminal session.
+#[tauri::command]
+pub async fn terminal_resize(request: TerminalResizeRequest) -> Result<(), ApiError> {
+    tauri::async_runtime::spawn_blocking(move || {
+        HostBridge::for_current_user()?.terminal_resize(request)
+    })
+    .await
+    .map_err(|_| internal("Terminal resize task failed."))?
+}
+
+/// Close a host terminal session.
+#[tauri::command]
+pub async fn terminal_close(request: TerminalCloseRequest) -> Result<(), ApiError> {
+    tauri::async_runtime::spawn_blocking(move || {
+        HostBridge::for_current_user()?.terminal_close(request)
+    })
+    .await
+    .map_err(|_| internal("Terminal close task failed."))?
+}
+
+/// Attach a terminal session and stream raw PTY output through a Tauri Channel.
+#[tauri::command(rename_all = "snake_case")]
+pub fn terminal_attach(
+    stream_id: String,
+    channel: Channel<InvokeResponseBody>,
+) -> Result<(), ApiError> {
+    let stream_id = Uuid::parse_str(&stream_id).map_err(|_| ApiError {
+        code: muxyard_contracts::ErrorCode::InvalidRequest,
+        message: "The terminal stream identifier is invalid.".to_string(),
+    })?;
+    let bridge = HostBridge::for_current_user()?;
+    let mut stream = bridge.attach_terminal(stream_id)?;
+    thread::Builder::new()
+        .name("muxyard-terminal-output".to_string())
+        .spawn(move || {
+            while let Ok(frame) = stream.next_frame() {
+                match frame.kind() {
+                    TerminalFrameKind::Output => {
+                        if channel
+                            .send(InvokeResponseBody::Raw(frame.payload().to_vec()))
+                            .is_err()
+                        {
+                            break;
+                        }
+                    }
+                    TerminalFrameKind::End => break,
+                    _ => {}
+                }
+            }
+        })
+        .map_err(|_| internal("Terminal output worker could not start."))?;
+    Ok(())
 }

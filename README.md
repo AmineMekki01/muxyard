@@ -8,19 +8,19 @@ A fast, collaborative development terminal for coding with Claude Code, Codex, a
 
 The current build provides the application foundation, shared wire contracts, a
 keyboard-first desktop shell, a single-instance user-owned host, a protected
-same-user local control endpoint, and a Tauri Rust host bridge. It is not yet a
-working terminal or agent runtime. The desktop displays an honest empty
-workspace with live host connection status. `muxyard-host start` launches a
-detached headless host; `run` stays in the foreground; `stop` and `status`
+same-user local control endpoint, and a Tauri Rust host bridge. It is not yet
+an agent runtime. When the host is ready the desktop opens a local terminal;
+otherwise it shows an honest empty workspace with live host connection status.
+`muxyard-host start` launches a detached headless host; `run` stays in the
+foreground; `stop` and `status`
 manage the current user's host. The host opens private per-user configuration,
 logs, and a migrated SQLite database, and serves typed `host.status` requests
 over a Unix socket or Windows named pipe. The desktop bridge auto-launches the
 host when absent, checks protocol compatibility, and watches status without
 exposing the raw endpoint to the webview. Native PTY lifecycle, binary terminal
-stream framing, and bounded per-client backpressure are implemented as Rust
-primitives; the desktop terminal UI and IPC spawn/input commands are not yet
-wired. It does not yet expose an agent or an HTTP service. The remote-web
-package is an unconnected placeholder.
+stream framing, bounded per-client backpressure, and an xterm.js desktop
+terminal are implemented. It does not yet expose an agent or an HTTP service.
+The remote-web package is an unconnected placeholder.
 
 ## Prerequisites
 
@@ -121,12 +121,30 @@ on that connection. Frames carry a stream UUID, monotonic sequence, kind, and up
 to 64 KiB of payload. Each attached client has a bounded 1–4 MiB write queue; a
 slow subscriber is detached without blocking other subscribers or the control
 listener. The codec defines input, resize, end, flow-control, and ACK kinds.
-Native PTY sessions can write input, resize, kill, and report exit status through
-`crates/terminal`; IPC spawn/input commands and credit wiring remain future
-terminal work.
+The host exposes typed `terminal.spawn`, `terminal.input`, `terminal.resize`,
+and `terminal.close` control methods. The Tauri Rust bridge forwards them to the
+host and streams binary output through a raw Tauri Channel.
+
+## Desktop Terminal
+
+The workspace mounts `@xterm/xterm` once the host is ready. PTY bytes go directly
+from the Tauri Channel into xterm and never through React state. Input, resize,
+and close commands are typed Tauri commands; WebGL is attempted with a DOM
+fallback on construction or context loss. Fit and Search addons are loaded, and
+the pane exposes selection copying, search-next, and a retry action. The output
+stream stays attached through idle periods instead of expiring with the control
+request timeout. Closing or unmounting the pane disposes the renderer and closes
+the host session.
+
+The terminal starts in the host process working directory because project
+selection is not implemented yet. Scrollback is renderer-local and bounded;
+no terminal output is written to SQLite. Full-screen TUI/Unicode and native
+copy/selection smoke remain manual verification items.
 
 The Tauri Rust bridge exposes typed `host_connect`, `host_status`,
-`host_watch`, and `host_unwatch` commands. It checks protocol version 1, shows
+`host_watch`, `host_unwatch`, `terminal_spawn`, `terminal_input`,
+`terminal_resize`, `terminal_close`, and `terminal_attach` commands. It checks
+protocol version 1, shows
 host starting/ready/reconnecting/offline/incompatible states, and retries status
 a bounded number of times before reporting `HOST_OFFLINE`. The status watcher
 uses a Tauri Channel; the webview receives no socket or TCP credentials. Closing
@@ -316,7 +334,7 @@ also requires the pinned Rust toolchain. Shared JSON fixtures live in
 ## Layout
 
 - `apps/host`: native host lifecycle, runtime, and local IPC listener.
-- `apps/desktop`: React 19/Vite/Tailwind 4 frontend and Tauri 2 Rust host bridge.
+- `apps/desktop`: React 19/Vite/Tailwind 4 frontend, xterm.js terminal, and Tauri 2 Rust host bridge.
 - `apps/remote-web`: static, unconnected React/Vite client scaffold.
 - `crates/core`: UI-independent native foundation.
 - `crates/contracts`: authoritative DTOs, bounded JSON decoder, and code generator.

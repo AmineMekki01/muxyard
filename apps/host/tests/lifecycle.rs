@@ -8,10 +8,16 @@ use std::{
     time::{Duration, Instant},
 };
 
-use muxyard_ipc::IpcClient;
+use muxyard_contracts::{
+    TerminalCloseRequest, TerminalInputRequest, TerminalSpawnRequest, TerminalSpawnResponse,
+};
+use muxyard_ipc::{
+    IpcClient, IpcResponse, TERMINAL_CLOSE_METHOD, TERMINAL_INPUT_METHOD, TERMINAL_SPAWN_METHOD,
+};
 use muxyard_platform::PlatformPaths;
 use muxyard_storage::Database;
 use serde_json::Value;
+use uuid::Uuid;
 
 struct HostGuard {
     root: PathBuf,
@@ -518,6 +524,79 @@ fn local_ipc_reports_host_status_and_closes_with_host() {
     assert!(IpcClient::connect(&paths).is_err());
     #[cfg(unix)]
     assert!(!paths.local_socket_path().exists());
+}
+
+#[cfg(unix)]
+#[test]
+fn local_host_terminal_control_roundtrip() {
+    let host = HostGuard::new();
+    assert!(host.start().status.success());
+    status_pid(&host);
+    let paths = PlatformPaths::from_root(&host.root);
+
+    let mut control = IpcClient::connect(&paths).unwrap();
+    let spawned: IpcResponse<TerminalSpawnResponse> = control
+        .request(
+            TERMINAL_SPAWN_METHOD,
+            TerminalSpawnRequest {
+                cwd: Some(host.root.to_string_lossy().into_owned()),
+                shell: Some("/bin/sh".to_string()),
+                rows: 24,
+                cols: 80,
+            },
+        )
+        .unwrap();
+    let spawned = match spawned {
+        IpcResponse::Ok { data } => data,
+        IpcResponse::Error { error } => panic!("terminal spawn failed: {error}"),
+    };
+    let stream_id = Uuid::parse_str(&spawned.stream_id.0).unwrap();
+    let mut terminal = IpcClient::connect(&paths)
+        .unwrap()
+        .attach_terminal(stream_id, None)
+        .unwrap();
+
+    let input: IpcResponse<()> = control
+        .request(
+            TERMINAL_INPUT_METHOD,
+            TerminalInputRequest {
+                stream_id: spawned.stream_id.clone(),
+                data: "printf 'host-terminal-ok\\n'\n".to_string(),
+            },
+        )
+        .unwrap();
+    assert!(matches!(input, IpcResponse::Ok { .. }));
+
+    let deadline = std::time::Instant::now() + Duration::from_secs(5);
+    let mut output = Vec::new();
+    while std::time::Instant::now() < deadline {
+        let frame = terminal.next_frame().unwrap();
+        output.extend_from_slice(frame.payload());
+        if output
+            .windows(b"host-terminal-ok".len())
+            .any(|window| window == b"host-terminal-ok")
+        {
+            break;
+        }
+    }
+    assert!(
+        String::from_utf8_lossy(&output).contains("host-terminal-ok"),
+        "missing host terminal output: {:?}",
+        String::from_utf8_lossy(&output)
+    );
+
+    let closed: IpcResponse<()> = control
+        .request(
+            TERMINAL_CLOSE_METHOD,
+            TerminalCloseRequest {
+                stream_id: spawned.stream_id,
+            },
+        )
+        .unwrap();
+    assert!(matches!(closed, IpcResponse::Ok { .. }));
+    drop(terminal);
+    drop(control);
+    assert!(host.stop().status.success());
 }
 
 #[cfg(unix)]

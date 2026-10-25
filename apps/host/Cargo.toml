@@ -12,6 +12,7 @@ muxyard-core.workspace = true
 muxyard-ipc.workspace = true
 muxyard-platform.workspace = true
 muxyard-storage.workspace = true
+muxyard-terminal.workspace = true
 serde.workspace = true
 serde_json.workspace = true
 thiserror.workspace = true

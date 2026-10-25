@@ -1,5 +1,9 @@
 import { renderToStaticMarkup } from "react-dom/server";
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
+
+vi.mock("./modules/terminal/TerminalPane", () => ({
+  TerminalPane: () => <div>Terminal pane</div>,
+}));
 
 import { App } from "./App";
 
@@ -14,7 +18,7 @@ describe("workspace shell", () => {
     expect(html).toContain("Not run");
     expect(html).toContain("Command palette");
     expect(html).toContain("not connected yet");
-    expect(html).toContain("no AI backend is required");
+    expect(html).toContain("local terminal is available");
   });
 
   it("offers only local shell controls, not pretend terminal surfaces", () => {

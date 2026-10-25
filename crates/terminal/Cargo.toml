@@ -6,6 +6,7 @@ rust-version.workspace = true
 publish.workspace = true
 
 [dependencies]
+muxyard-contracts.workspace = true
 muxyard-platform.workspace = true
 portable-pty.workspace = true
 serde.workspace = true

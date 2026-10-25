@@ -5,7 +5,10 @@ mod host_bridge;
 
 use tauri::Manager;
 
-pub use commands::{host_connect, host_status, host_unwatch, host_watch};
+pub use commands::{
+    host_connect, host_status, host_unwatch, host_watch, terminal_attach, terminal_close,
+    terminal_input, terminal_resize, terminal_spawn,
+};
 
 /// Open the workspace window and register the typed local host bridge.
 ///
@@ -22,7 +25,12 @@ pub fn run() -> tauri::Result<()> {
             host_connect,
             host_status,
             host_watch,
-            host_unwatch
+            host_unwatch,
+            terminal_spawn,
+            terminal_input,
+            terminal_resize,
+            terminal_close,
+            terminal_attach
         ])
         .build(tauri::generate_context!())?;
     app.run(|app_handle, event| {

@@ -6,6 +6,7 @@
 mod frame;
 mod hub;
 mod pty;
+mod service;
 
 pub use frame::{
     MAX_TERMINAL_FRAME_BYTES, MAX_TERMINAL_PAYLOAD, TERMINAL_HEADER_BYTES,
@@ -18,3 +19,4 @@ pub use hub::{
     TerminalSubscription,
 };
 pub use pty::{PtyError, PtyExitStatus, PtySession, PtySessionConfig, PtySessionIdentity};
+pub use service::{TerminalService, TerminalServiceError};

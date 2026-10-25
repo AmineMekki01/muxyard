@@ -25,12 +25,14 @@ use interprocess::local_socket::GenericFilePath;
 use interprocess::local_socket::GenericNamespaced;
 use interprocess::local_socket::{ListenerNonblockingMode, ListenerOptions, prelude::*};
 use muxyard_contracts::{
-    ApiError, ControlEnvelope, ControlMessageType, ErrorCode, Id, ProtocolVersion, decode_control,
+    ApiError, ControlEnvelope, ControlMessageType, ErrorCode, Id, ProtocolVersion,
+    TerminalCloseRequest, TerminalInputRequest, TerminalResizeRequest, TerminalSpawnRequest,
+    decode_control,
 };
 use muxyard_platform::PlatformPaths;
 use muxyard_terminal::{
     MAX_TERMINAL_PAYLOAD, TerminalAttachRequest, TerminalAttachResponse, TerminalHub,
-    TerminalHubError, TerminalSubscription,
+    TerminalHubError, TerminalService, TerminalServiceError, TerminalSubscription,
 };
 use serde::Serialize;
 use serde_json::Value;
@@ -38,7 +40,8 @@ use tracing::warn;
 
 use crate::{
     HOST_STATUS_METHOD, HostStatusRequest, HostStatusResponse, IpcError, IpcResponse,
-    TERMINAL_ATTACH_METHOD, read_frame_until, write_frame_until,
+    TERMINAL_ATTACH_METHOD, TERMINAL_CLOSE_METHOD, TERMINAL_INPUT_METHOD, TERMINAL_RESIZE_METHOD,
+    TERMINAL_SPAWN_METHOD, read_frame_until, write_frame_until,
 };
 
 /// Bounds applied to one local client connection.
@@ -90,7 +93,12 @@ impl IpcServer {
         status: HostStatusResponse,
         terminal: Arc<TerminalHub>,
     ) -> Result<Self, IpcError> {
-        Self::start_inner(paths, status, Some(terminal), IpcOptions::default())
+        Self::start_inner(
+            paths,
+            status,
+            Some(Arc::new(TerminalService::new(terminal))),
+            IpcOptions::default(),
+        )
     }
 
     /// Bind the endpoint with terminal streams and explicit timeouts.
@@ -100,13 +108,37 @@ impl IpcServer {
         terminal: Arc<TerminalHub>,
         options: IpcOptions,
     ) -> Result<Self, IpcError> {
+        Self::start_inner(
+            paths,
+            status,
+            Some(Arc::new(TerminalService::new(terminal))),
+            options,
+        )
+    }
+
+    /// Bind the endpoint with a managed terminal service.
+    pub fn start_with_terminal_service(
+        paths: &PlatformPaths,
+        status: HostStatusResponse,
+        terminal: Arc<TerminalService>,
+    ) -> Result<Self, IpcError> {
+        Self::start_inner(paths, status, Some(terminal), IpcOptions::default())
+    }
+
+    /// Bind the endpoint with a managed terminal service and explicit timeouts.
+    pub fn start_with_terminal_service_and_options(
+        paths: &PlatformPaths,
+        status: HostStatusResponse,
+        terminal: Arc<TerminalService>,
+        options: IpcOptions,
+    ) -> Result<Self, IpcError> {
         Self::start_inner(paths, status, Some(terminal), options)
     }
 
     fn start_inner(
         paths: &PlatformPaths,
         status: HostStatusResponse,
-        terminal: Option<Arc<TerminalHub>>,
+        terminal: Option<Arc<TerminalService>>,
         options: IpcOptions,
     ) -> Result<Self, IpcError> {
         let listener = create_listener(paths)?;
@@ -177,7 +209,7 @@ fn accept_loop(
     stop: Arc<AtomicBool>,
     connections: Arc<Mutex<Vec<JoinHandle<()>>>>,
     status: Arc<HostStatusResponse>,
-    terminal: Option<Arc<TerminalHub>>,
+    terminal: Option<Arc<TerminalService>>,
     options: IpcOptions,
 ) {
     while !stop.load(Ordering::SeqCst) {
@@ -222,7 +254,7 @@ fn accept_loop(
 fn handle_connection(
     mut stream: LocalSocketStream,
     status: &HostStatusResponse,
-    terminal: Option<&TerminalHub>,
+    terminal: Option<&TerminalService>,
     stop: &AtomicBool,
     options: IpcOptions,
 ) -> Result<(), IpcError> {
@@ -265,7 +297,7 @@ fn handle_frame(
     stream: &mut LocalSocketStream,
     frame: &[u8],
     status: &HostStatusResponse,
-    terminal: Option<&TerminalHub>,
+    terminal: Option<&TerminalService>,
     timeout: Duration,
 ) -> Result<FrameAction, IpcError> {
     let request = match decode_control::<Value>(frame) {
@@ -348,14 +380,14 @@ fn handle_frame(
                     return Ok(FrameAction::Continue);
                 }
             };
-            let subscription = match terminal.subscribe(attach.stream_id, attach.queue_bytes) {
+            let subscription = match terminal.attach(attach.stream_id, attach.queue_bytes) {
                 Ok(subscription) => subscription,
                 Err(error) => {
                     write_error(
                         stream,
                         request.id,
                         request.method,
-                        terminal_hub_error(error),
+                        terminal_service_error(error),
                         timeout,
                     )?;
                     return Ok(FrameAction::Continue);
@@ -376,6 +408,182 @@ fn handle_frame(
             )?;
             return Ok(FrameAction::Terminal(subscription));
         }
+        TERMINAL_SPAWN_METHOD => {
+            let Some(terminal) = terminal else {
+                write_error(
+                    stream,
+                    request.id,
+                    request.method,
+                    ApiError {
+                        code: ErrorCode::UnsupportedCapability,
+                        message: "Terminal sessions are not available on this host.".to_string(),
+                    },
+                    timeout,
+                )?;
+                return Ok(FrameAction::Continue);
+            };
+            let spawn: TerminalSpawnRequest = match serde_json::from_value(request.data) {
+                Ok(spawn) => spawn,
+                Err(_) => {
+                    write_error(
+                        stream,
+                        request.id,
+                        request.method,
+                        invalid_request("The terminal.spawn request body is invalid."),
+                        timeout,
+                    )?;
+                    return Ok(FrameAction::Continue);
+                }
+            };
+            match terminal.spawn(spawn) {
+                Ok(response) => write_response(
+                    stream,
+                    request.id,
+                    request.method,
+                    IpcResponse::ok(response),
+                    timeout,
+                )?,
+                Err(error) => write_error(
+                    stream,
+                    request.id,
+                    request.method,
+                    terminal_service_error(error),
+                    timeout,
+                )?,
+            }
+        }
+        TERMINAL_INPUT_METHOD => {
+            let Some(terminal) = terminal else {
+                write_error(
+                    stream,
+                    request.id,
+                    request.method,
+                    ApiError {
+                        code: ErrorCode::UnsupportedCapability,
+                        message: "Terminal sessions are not available on this host.".to_string(),
+                    },
+                    timeout,
+                )?;
+                return Ok(FrameAction::Continue);
+            };
+            let input: TerminalInputRequest = match serde_json::from_value(request.data) {
+                Ok(input) => input,
+                Err(_) => {
+                    write_error(
+                        stream,
+                        request.id,
+                        request.method,
+                        invalid_request("The terminal.input request body is invalid."),
+                        timeout,
+                    )?;
+                    return Ok(FrameAction::Continue);
+                }
+            };
+            match terminal.input(&input) {
+                Ok(()) => write_response(
+                    stream,
+                    request.id,
+                    request.method,
+                    IpcResponse::ok(()),
+                    timeout,
+                )?,
+                Err(error) => write_error(
+                    stream,
+                    request.id,
+                    request.method,
+                    terminal_service_error(error),
+                    timeout,
+                )?,
+            }
+        }
+        TERMINAL_RESIZE_METHOD => {
+            let Some(terminal) = terminal else {
+                write_error(
+                    stream,
+                    request.id,
+                    request.method,
+                    ApiError {
+                        code: ErrorCode::UnsupportedCapability,
+                        message: "Terminal sessions are not available on this host.".to_string(),
+                    },
+                    timeout,
+                )?;
+                return Ok(FrameAction::Continue);
+            };
+            let resize: TerminalResizeRequest = match serde_json::from_value(request.data) {
+                Ok(resize) => resize,
+                Err(_) => {
+                    write_error(
+                        stream,
+                        request.id,
+                        request.method,
+                        invalid_request("The terminal.resize request body is invalid."),
+                        timeout,
+                    )?;
+                    return Ok(FrameAction::Continue);
+                }
+            };
+            match terminal.resize(&resize) {
+                Ok(()) => write_response(
+                    stream,
+                    request.id,
+                    request.method,
+                    IpcResponse::ok(()),
+                    timeout,
+                )?,
+                Err(error) => write_error(
+                    stream,
+                    request.id,
+                    request.method,
+                    terminal_service_error(error),
+                    timeout,
+                )?,
+            }
+        }
+        TERMINAL_CLOSE_METHOD => {
+            let Some(terminal) = terminal else {
+                write_error(
+                    stream,
+                    request.id,
+                    request.method,
+                    ApiError {
+                        code: ErrorCode::UnsupportedCapability,
+                        message: "Terminal sessions are not available on this host.".to_string(),
+                    },
+                    timeout,
+                )?;
+                return Ok(FrameAction::Continue);
+            };
+            let close: TerminalCloseRequest = match serde_json::from_value(request.data) {
+                Ok(close) => close,
+                Err(_) => {
+                    write_error(
+                        stream,
+                        request.id,
+                        request.method,
+                        invalid_request("The terminal.close request body is invalid."),
+                        timeout,
+                    )?;
+                    return Ok(FrameAction::Continue);
+                }
+            };
+            match terminal.close(&close) {
+                Ok(_) => write_response(
+                    stream,
+                    request.id,
+                    request.method,
+                    IpcResponse::ok(()),
+                    timeout,
+                )?,
+                Err(error) => write_error(
+                    stream,
+                    request.id,
+                    request.method,
+                    terminal_service_error(error),
+                    timeout,
+                )?,
+            }
+        }
         _ => {
             write_error(
                 stream,
@@ -392,23 +600,49 @@ fn handle_frame(
     Ok(FrameAction::Continue)
 }
 
-fn terminal_hub_error(error: TerminalHubError) -> ApiError {
+fn terminal_service_error(error: TerminalServiceError) -> ApiError {
     match error {
-        TerminalHubError::UnknownSession(_) => ApiError {
+        TerminalServiceError::UnknownSession(_) => ApiError {
             code: ErrorCode::NotFound,
-            message: "The requested terminal stream does not exist.".to_string(),
+            message: "The requested terminal session does not exist.".to_string(),
         },
-        TerminalHubError::TooManySessions(_) => ApiError {
+        TerminalServiceError::InvalidStreamId(_) => ApiError {
+            code: ErrorCode::InvalidRequest,
+            message: "The requested terminal stream identifier is invalid.".to_string(),
+        },
+        TerminalServiceError::Hub(TerminalHubError::TooManySessions(_)) => ApiError {
             code: ErrorCode::RateLimited,
             message: "Too many terminal streams are active.".to_string(),
         },
-        TerminalHubError::InvalidQueue { .. } | TerminalHubError::InvalidLimits(_) => ApiError {
+        TerminalServiceError::Hub(TerminalHubError::UnknownSession(_)) => ApiError {
+            code: ErrorCode::NotFound,
+            message: "The requested terminal stream does not exist.".to_string(),
+        },
+        TerminalServiceError::Hub(
+            TerminalHubError::InvalidQueue { .. } | TerminalHubError::InvalidLimits(_),
+        ) => ApiError {
             code: ErrorCode::InvalidRequest,
             message: "The requested terminal queue size is invalid.".to_string(),
         },
-        TerminalHubError::Closed => ApiError {
+        TerminalServiceError::Hub(TerminalHubError::Closed) => ApiError {
             code: ErrorCode::NotFound,
             message: "The requested terminal stream is closed.".to_string(),
+        },
+        TerminalServiceError::Pty(error) => match error {
+            muxyard_terminal::PtyError::Closed => ApiError {
+                code: ErrorCode::Conflict,
+                message: "The terminal session is closed.".to_string(),
+            },
+            muxyard_terminal::PtyError::Platform(_)
+            | muxyard_terminal::PtyError::InvalidSize
+            | muxyard_terminal::PtyError::Pty(_) => ApiError {
+                code: ErrorCode::InvalidRequest,
+                message: "The terminal session could not be started or updated.".to_string(),
+            },
+            muxyard_terminal::PtyError::Hub(_) | muxyard_terminal::PtyError::Io(_) => ApiError {
+                code: ErrorCode::Internal,
+                message: "The terminal session operation failed.".to_string(),
+            },
         },
     }
 }

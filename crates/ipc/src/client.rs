@@ -17,7 +17,7 @@ use uuid::Uuid;
 
 use crate::{
     HOST_STATUS_METHOD, HostStatusRequest, HostStatusResponse, IpcError, IpcResponse,
-    TERMINAL_ATTACH_METHOD, read_frame_until, write_frame_until,
+    TERMINAL_ATTACH_METHOD, read_frame, read_frame_until, write_frame_until,
 };
 
 /// Connected local control client.
@@ -99,9 +99,9 @@ impl IpcClient {
                 if data.stream_id != stream_id {
                     return Err(IpcError::TerminalProtocol);
                 }
+                configure_terminal_stream(&self.stream)?;
                 Ok(TerminalStream {
                     stream: self.stream,
-                    timeout: self.timeout,
                     stream_id,
                     sequence: TerminalSequence::starting_at(data.next_sequence),
                 })
@@ -114,7 +114,6 @@ impl IpcClient {
 /// A connection switched to one terminal stream after `terminal.attach`.
 pub struct TerminalStream {
     stream: LocalSocketStream,
-    timeout: Duration,
     stream_id: Uuid,
     sequence: TerminalSequence,
 }
@@ -125,10 +124,9 @@ impl TerminalStream {
         self.stream_id
     }
 
-    /// Read the next terminal frame, enforcing stream and sequence identity.
+    /// Read the next terminal frame, blocking until output or connection close.
     pub fn next_frame(&mut self) -> Result<TerminalFrame, IpcError> {
-        let frame = read_frame_until(&mut self.stream, Instant::now() + self.timeout)?
-            .ok_or(IpcError::Closed)?;
+        let frame = read_frame(&mut self.stream)?.ok_or(IpcError::Closed)?;
         let frame = TerminalFrame::decode(&frame)?;
         if frame.stream_id() != self.stream_id {
             return Err(IpcError::TerminalProtocol);
@@ -150,6 +148,24 @@ fn configure_stream(stream: &LocalSocketStream, timeout: Duration) -> Result<(),
 fn configure_stream(stream: &LocalSocketStream, _timeout: Duration) -> Result<(), IpcError> {
     stream.set_nonblocking(true)?;
     Ok(())
+}
+
+#[cfg(unix)]
+fn configure_terminal_stream(stream: &LocalSocketStream) -> Result<(), IpcError> {
+    stream.set_nonblocking(false)?;
+    stream.set_recv_timeout(None)?;
+    Ok(())
+}
+
+#[cfg(windows)]
+fn configure_terminal_stream(stream: &LocalSocketStream) -> Result<(), IpcError> {
+    stream.set_nonblocking(false)?;
+    Ok(())
+}
+
+#[cfg(not(any(unix, windows)))]
+fn configure_terminal_stream(_stream: &LocalSocketStream) -> Result<(), IpcError> {
+    Err(IpcError::UnsupportedPlatform)
 }
 
 #[cfg(not(any(unix, windows)))]
