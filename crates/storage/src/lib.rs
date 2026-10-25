@@ -8,7 +8,8 @@ use std::{io, path::PathBuf};
 
 pub use database::{Database, DatabaseOptions};
 pub use host::{
-    HostInstance, HostState, get_host_instance, record_host_instance, update_host_instance_state,
+    HostInstance, HostState, get_host_instance, mark_stale_terminal_sessions,
+    reconcile_stale_host_instances, record_host_instance, update_host_instance_state,
 };
 pub use migrations::{MIGRATIONS, Migration, MigrationReport};
 

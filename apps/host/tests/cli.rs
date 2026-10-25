@@ -32,12 +32,16 @@ fn version_reports_semver_and_protocol_on_repeated_starts() {
 }
 
 #[test]
-fn no_arguments_and_help_disclose_that_no_services_start() {
+fn no_arguments_and_help_disclose_the_lifecycle_and_limits() {
     for args in [vec![], vec!["--help"], vec!["-h"]] {
         let output = host().args(args).output().expect("host should start");
         assert!(output.status.success());
         let stdout = String::from_utf8(output.stdout).expect("UTF-8 help");
-        assert!(stdout.contains("No services are started."));
+        assert!(stdout.contains("run"));
+        assert!(stdout.contains("start"));
+        assert!(stdout.contains("stop"));
+        assert!(stdout.contains("logout"));
+        assert!(stdout.contains("does not resume"));
         assert!(stdout.contains("--init"));
     }
 }

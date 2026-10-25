@@ -5,7 +5,8 @@ use std::fs;
 use muxyard_contracts::TaskState;
 use muxyard_storage::{
     Database, DatabaseOptions, HostInstance, HostState, MIGRATIONS, Migration, StorageError,
-    get_host_instance, record_host_instance, update_host_instance_state,
+    get_host_instance, mark_stale_terminal_sessions, reconcile_stale_host_instances,
+    record_host_instance, update_host_instance_state,
 };
 use rusqlite::{Connection, params};
 
@@ -215,6 +216,78 @@ fn host_instance_roundtrip_and_upsert_are_idempotent() {
     assert_eq!(stored.state, HostState::Stopped);
     assert_eq!(stored.heartbeat_ms, 300);
     assert!(!update_host_instance_state(connection, "missing", HostState::Stopped, 300).unwrap());
+}
+
+#[test]
+fn reconciles_old_hosts_and_marks_their_sessions_lost() {
+    let (_root, mut database) = temp_database();
+    database.migrate().unwrap();
+    let connection = database.connection();
+    let old = HostInstance {
+        id: "old-host".to_string(),
+        pid: 10,
+        os_user: "user".to_string(),
+        process_start_token: "old-start".to_string(),
+        host_version: "0.1.0".to_string(),
+        protocol_version: 1,
+        state: HostState::Ready,
+        started_ms: 1,
+        heartbeat_ms: 1,
+    };
+    let current = HostInstance {
+        id: "current-host".to_string(),
+        pid: 20,
+        os_user: "user".to_string(),
+        process_start_token: "current-start".to_string(),
+        host_version: "0.1.0".to_string(),
+        protocol_version: 1,
+        state: HostState::Starting,
+        started_ms: 2,
+        heartbeat_ms: 2,
+    };
+    record_host_instance(connection, &old).unwrap();
+    record_host_instance(connection, &current).unwrap();
+    connection
+        .execute(
+            "INSERT INTO terminal_sessions (
+                id, project_id, task_id, host_instance_id, execution_environment_id,
+                cwd, shell_executable, state, created_ms, updated_ms, last_event_seq
+             ) VALUES ('session-1', NULL, NULL, 'old-host', 'native-mac',
+                '/tmp', '/bin/zsh', 'running', 1, 1, 0)",
+            [],
+        )
+        .unwrap();
+
+    assert_eq!(
+        reconcile_stale_host_instances(connection, "current-host", 100).unwrap(),
+        1
+    );
+    assert_eq!(
+        mark_stale_terminal_sessions(connection, "current-host", 100).unwrap(),
+        1
+    );
+    assert_eq!(
+        get_host_instance(connection, "old-host")
+            .unwrap()
+            .unwrap()
+            .state,
+        HostState::Stopped
+    );
+    assert_eq!(
+        get_host_instance(connection, "current-host")
+            .unwrap()
+            .unwrap()
+            .state,
+        HostState::Starting
+    );
+    let session_state: String = connection
+        .query_row(
+            "SELECT state FROM terminal_sessions WHERE id = 'session-1'",
+            [],
+            |row| row.get(0),
+        )
+        .unwrap();
+    assert_eq!(session_state, "lost");
 }
 
 #[test]

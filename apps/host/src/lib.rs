@@ -1,20 +1,29 @@
-//! One-shot host bootstrap for configuration, logging, and durable storage.
+//! Host bootstrap, single-instance lifecycle, and detached start/stop/status.
+
+mod lock;
+mod runtime;
 
 use std::{
-    env,
+    env, io,
+    path::PathBuf,
     time::{SystemTime, UNIX_EPOCH},
 };
 
 use muxyard_contracts::PROTOCOL_VERSION;
 use muxyard_platform::{
     ConfigError, ConfigStore, HostConfig, LoggingError, PlatformError, PlatformPaths,
-    init_file_logging,
+    current_process_identity, init_file_logging,
 };
 use muxyard_storage::{
-    Database, DatabaseOptions, HostInstance, HostState, StorageError, record_host_instance,
-    update_host_instance_state,
+    Database, DatabaseOptions, HostInstance, HostState, StorageError, mark_stale_terminal_sessions,
+    reconcile_stale_host_instances, record_host_instance,
 };
 use uuid::Uuid;
+
+pub use lock::{HostLock, HostLockInfo, LockError, LockState};
+pub use runtime::{
+    HostStatus, StartResult, StopResult, run_host, start_host, status_host, stop_host,
+};
 
 /// Initialized host state for the current one-shot invocation.
 #[derive(Debug)]
@@ -29,7 +38,7 @@ pub struct Bootstrap {
     pub schema_version: i64,
 }
 
-/// Host bootstrap failure.
+/// Host bootstrap or lifecycle failure.
 #[derive(Debug, thiserror::Error)]
 pub enum HostError {
     /// Per-user paths could not be resolved or secured.
@@ -44,9 +53,44 @@ pub enum HostError {
     /// Storage could not be opened or migrated.
     #[error(transparent)]
     Storage(#[from] StorageError),
+    /// The single-instance lock failed.
+    #[error(transparent)]
+    Lock(#[from] LockError),
     /// The operating-system user name is unavailable.
     #[error("operating-system user name is not available")]
     MissingOsUser,
+    /// The OS signal handler could not be installed.
+    #[error("host signal handler could not be installed: {0}")]
+    Signal(String),
+    /// A process or startup-file operation failed.
+    #[error("host I/O failed for {path}: {source}")]
+    Io {
+        /// Path or executable involved.
+        path: PathBuf,
+        /// Underlying error.
+        #[source]
+        source: io::Error,
+    },
+    /// The detached host exited before becoming ready.
+    #[error("host exited before becoming ready (status {status:?}): {detail}")]
+    StartFailed {
+        /// Exit status, if any.
+        status: Option<i32>,
+        /// Startup diagnostics, bounded by the caller.
+        detail: String,
+    },
+    /// The detached host did not become ready in time.
+    #[error("host did not become ready: {detail}")]
+    StartTimeout {
+        /// Startup diagnostics, bounded by the caller.
+        detail: String,
+    },
+    /// A live host did not stop in time.
+    #[error("host pid {pid} did not stop within the timeout")]
+    StopTimeout {
+        /// Host process ID.
+        pid: u32,
+    },
 }
 
 /// Resolve current-user paths and initialize configuration, logging, and storage.
@@ -61,6 +105,14 @@ pub fn initialize() -> Result<Bootstrap, HostError> {
 /// Call at most once per process because logging installs a global subscriber.
 pub fn initialize_paths(paths: PlatformPaths) -> Result<Bootstrap, HostError> {
     paths.ensure()?;
+    let identity = current_process_identity()?;
+    let instance_id = Uuid::new_v4().to_string();
+    let lock = HostLock::acquire(
+        &paths.host_lock_path(),
+        HostLockInfo::new(instance_id.clone(), &identity, now_ms()),
+    )?;
+    lock::clear_stop_request(&paths.stop_request_path())?;
+    lock::clear_ready_marker(&paths.host_ready_path())?;
 
     let config_store = ConfigStore::new(paths.config_path());
     let config = config_store.load_or_create_default()?;
@@ -69,28 +121,25 @@ pub fn initialize_paths(paths: PlatformPaths) -> Result<Bootstrap, HostError> {
     let mut database =
         Database::open_with_options(paths.database_path(), DatabaseOptions::default())?;
     let migration = database.migrate()?;
-
     let now = now_ms();
+    reconcile_stale_host_instances(database.connection(), &instance_id, now)?;
+    mark_stale_terminal_sessions(database.connection(), &instance_id, now)?;
+
     let instance = HostInstance {
-        id: Uuid::new_v4().to_string(),
-        pid: std::process::id(),
+        id: instance_id.clone(),
+        pid: identity.pid,
         os_user: os_user()?,
-        process_start_token: Uuid::new_v4().to_string(),
+        process_start_token: identity.start_identity,
         host_version: env!("CARGO_PKG_VERSION").to_string(),
         protocol_version: PROTOCOL_VERSION,
-        state: HostState::Ready,
+        state: HostState::Stopped,
         started_ms: now,
         heartbeat_ms: now,
     };
+    record_host_instance(database.connection(), &instance)?;
 
-    let transaction = database
-        .connection_mut()
-        .transaction()
-        .map_err(StorageError::from)?;
-    record_host_instance(&transaction, &instance)?;
-    update_host_instance_state(&transaction, &instance.id, HostState::Stopped, now_ms())?;
-    transaction.commit().map_err(StorageError::from)?;
-
+    drop(database);
+    drop(lock);
     tracing::info!(
         schema_version = migration.current_version,
         applied_migrations = migration.applied.len(),
@@ -100,12 +149,12 @@ pub fn initialize_paths(paths: PlatformPaths) -> Result<Bootstrap, HostError> {
     Ok(Bootstrap {
         paths,
         config,
-        host_instance_id: instance.id,
+        host_instance_id: instance_id,
         schema_version: migration.current_version,
     })
 }
 
-fn os_user() -> Result<String, HostError> {
+pub(crate) fn os_user() -> Result<String, HostError> {
     #[cfg(unix)]
     let user = env::var("USER").or_else(|_| env::var("LOGNAME"));
     #[cfg(windows)]
@@ -118,7 +167,7 @@ fn os_user() -> Result<String, HostError> {
         .ok_or(HostError::MissingOsUser)
 }
 
-fn now_ms() -> i64 {
+pub(crate) fn now_ms() -> i64 {
     SystemTime::now()
         .duration_since(UNIX_EPOCH)
         .map(|duration| duration.as_millis() as i64)

@@ -65,7 +65,7 @@ pub struct HostInstance {
     pub pid: u32,
     /// Operating-system user that owns the host.
     pub os_user: String,
-    /// Random token generated for this process start.
+    /// OS process start identity used with PID to reject PID reuse.
     pub process_start_token: String,
     /// Host package version.
     pub host_version: String,
@@ -125,6 +125,36 @@ pub fn update_host_instance_state(
         params![id, state.as_str(), heartbeat_ms],
     )?;
     Ok(changed > 0)
+}
+
+/// Mark older non-terminal host rows stopped after a fresh single-instance start.
+pub fn reconcile_stale_host_instances(
+    connection: &Connection,
+    live_instance_id: &str,
+    heartbeat_ms: i64,
+) -> Result<usize, StorageError> {
+    let changed = connection.execute(
+        "UPDATE host_instances
+         SET state = 'stopped', heartbeat_ms = ?2
+         WHERE id != ?1 AND state NOT IN ('stopped', 'failed')",
+        params![live_instance_id, heartbeat_ms],
+    )?;
+    Ok(changed)
+}
+
+/// Mark sessions owned by previous host instances as lost.
+pub fn mark_stale_terminal_sessions(
+    connection: &Connection,
+    live_instance_id: &str,
+    updated_ms: i64,
+) -> Result<usize, StorageError> {
+    let changed = connection.execute(
+        "UPDATE terminal_sessions
+         SET state = 'lost', updated_ms = ?2
+         WHERE host_instance_id != ?1 AND state NOT IN ('exited', 'lost')",
+        params![live_instance_id, updated_ms],
+    )?;
+    Ok(changed)
 }
 
 /// Read one host instance, if present.

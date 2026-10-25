@@ -6,12 +6,14 @@ A fast, collaborative development terminal for coding with Claude Code, Codex, a
 
 ## Implementation Status
 
-The current build provides the application foundation, shared wire contracts, and
-a one-shot local storage initializer, not a working terminal or agent runtime. The
-desktop displays an empty workspace. `muxyard-host --version` and `--help` exit
-without starting a daemon, socket, database, child process, or HTTP service.
-`muxyard-host --init` creates private per-user configuration, logs, and a migrated
-SQLite database, then exits. The remote-web package is an unconnected placeholder.
+The current build provides the application foundation, shared wire contracts, a
+keyboard-first desktop shell, and a single-instance user-owned host, not a
+working terminal or agent runtime. The desktop displays an honest empty
+workspace. `muxyard-host start` launches a detached headless host; `run` stays in
+the foreground; `stop` and `status` manage the current user's host. The host
+opens private per-user configuration, logs, and a migrated SQLite database. It
+does not yet expose local IPC, a terminal, an agent, or an HTTP service. The
+remote-web package is an unconnected placeholder.
 
 ## Prerequisites
 
@@ -48,11 +50,37 @@ ports. No production server or public listener is started.
 ```sh
 cargo run --locked -p muxyard-host -- --version
 cargo run --locked -p muxyard-host -- --help
+cargo run --locked -p muxyard-host -- start
+cargo run --locked -p muxyard-host -- status --json
+cargo run --locked -p muxyard-host -- stop
+cargo run --locked -p muxyard-host -- run
 cargo run --locked -p muxyard-host -- --init
 ```
 
-Unsupported host flags return exit 2. No arguments print scaffold help and exit.
-`--init` is a one-shot bootstrap, not the persistent host runtime.
+Unsupported host flags return exit 2. No arguments print help and exit.
+`--init` is a one-shot storage bootstrap. `start` is detached and waits for the
+host to become ready; `run` is the foreground form; `stop` is graceful and
+idempotent; `status` exits 0 only while a live host is present. Starting twice
+reports the existing host instead of opening a second writer.
+
+## Host Lifecycle
+
+The host is a normal user process, never a root service. It stores a
+`host.lock` containing PID, OS process start identity, instance ID, host version,
+protocol, and start time under the private runtime directory. A live lock
+requires both PID and start identity to match; dead PIDs, PID reuse, and corrupt
+locks are never treated as live. `host.ready` is written only after configuration
+and migrations are ready, and `host.stop` is an instance-scoped graceful stop
+request.
+
+`start` places the host in a detached OS process group/session with null terminal
+IO, so exiting the launcher or desktop UI does not terminate it. The host stops
+on explicit `stop` or Ctrl+C/SIGTERM. OS logout/reboot may stop it, but that
+behavior is not physically tested here. The host does not resume terminals after
+the host process exits. Unix runtime directories are 0700 and runtime files are
+0600; Windows ACL hardening remains pending. Local IPC and the desktop bridge
+arrive in a later ticket, so a second `start` reports the existing host rather
+than attaching a live client connection.
 
 ## Local Storage Foundation
 

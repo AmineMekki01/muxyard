@@ -255,6 +255,10 @@ impl From<PlatformError> for ConfigError {
                 path: PathBuf::new(),
                 source: io::Error::new(io::ErrorKind::Unsupported, "unsupported platform"),
             },
+            PlatformError::Process(message) => Self::Io {
+                path: PathBuf::new(),
+                source: io::Error::other(message),
+            },
         }
     }
 }

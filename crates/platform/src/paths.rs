@@ -3,8 +3,9 @@
 use std::{
     env,
     fs::{self, File, OpenOptions},
-    io,
+    io::{self, Write},
     path::{Path, PathBuf},
+    time::{SystemTime, UNIX_EPOCH},
 };
 
 use crate::{PlatformError, io_error};
@@ -81,6 +82,26 @@ impl PlatformPaths {
     /// Append-only structured log file.
     pub fn log_path(&self) -> PathBuf {
         self.data_dir.join("logs").join("muxyard.log")
+    }
+
+    /// Single-instance host lock file.
+    pub fn host_lock_path(&self) -> PathBuf {
+        self.runtime_dir.join("host.lock")
+    }
+
+    /// Graceful stop request marker.
+    pub fn stop_request_path(&self) -> PathBuf {
+        self.runtime_dir.join("host.stop")
+    }
+
+    /// Ready marker written after startup completes.
+    pub fn host_ready_path(&self) -> PathBuf {
+        self.runtime_dir.join("host.ready")
+    }
+
+    /// Detached host startup diagnostics.
+    pub fn startup_log_path(&self) -> PathBuf {
+        self.runtime_dir.join("host-startup.log")
     }
 
     /// Create and secure every directory this layout owns.
@@ -228,6 +249,35 @@ pub fn open_private_append(path: &Path) -> Result<File, PlatformError> {
     let file = options.open(path).map_err(|error| io_error(path, error))?;
     secure_file(path)?;
     Ok(file)
+}
+
+/// Replace a private file through a same-directory temporary file.
+pub fn write_private_file(path: &Path, contents: &[u8]) -> Result<(), PlatformError> {
+    reject_symlink_and_non_file(path)?;
+    let parent = path
+        .parent()
+        .filter(|parent| !parent.as_os_str().is_empty())
+        .unwrap_or_else(|| Path::new("."));
+    let temp_path = parent.join(format!(
+        ".muxyard-write-{}-{}.tmp",
+        std::process::id(),
+        SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .map(|duration| duration.as_nanos())
+            .unwrap_or_default()
+    ));
+    let mut file = open_private_new(&temp_path)?;
+    if let Err(error) = file.write_all(contents).and_then(|()| file.sync_all()) {
+        drop(file);
+        let _ = fs::remove_file(&temp_path);
+        return Err(io_error(&temp_path, error));
+    }
+    drop(file);
+    if let Err(error) = fs::rename(&temp_path, path) {
+        let _ = fs::remove_file(&temp_path);
+        return Err(io_error(path, error));
+    }
+    secure_file(path)
 }
 
 /// Create a new private file, refusing to replace an existing path.
@@ -380,6 +430,28 @@ mod tests {
             .write_all(b"-second")
             .unwrap();
         assert_eq!(fs::read(&path).unwrap(), b"first-second");
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn private_control_files_replace_atomically() {
+        use std::os::unix::fs::PermissionsExt;
+        let root = tempfile::tempdir().unwrap();
+        let path = root.path().join("control");
+        write_private_file(&path, b"first").unwrap();
+        write_private_file(&path, b"second").unwrap();
+        assert_eq!(fs::read(&path).unwrap(), b"second");
+        assert_eq!(
+            fs::metadata(&path).unwrap().permissions().mode() & 0o777,
+            0o600
+        );
+        assert!(fs::read_dir(root.path()).unwrap().all(|entry| {
+            !entry
+                .unwrap()
+                .file_name()
+                .to_string_lossy()
+                .ends_with(".tmp")
+        }));
     }
 
     #[test]

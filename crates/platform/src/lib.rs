@@ -3,6 +3,7 @@
 mod config;
 mod logging;
 mod paths;
+mod process;
 
 use std::{io, path::PathBuf};
 
@@ -11,7 +12,12 @@ pub use config::{
     ResourceLimits,
 };
 pub use logging::{LoggingError, Sensitive, build_subscriber, init_file_logging};
-pub use paths::{PlatformPaths, ensure_private_dir, open_private_append, open_private_new};
+pub use paths::{
+    PlatformPaths, ensure_private_dir, open_private_append, open_private_new, write_private_file,
+};
+pub use process::{
+    ProcessIdentity, configure_detached, current_process_identity, process_identity,
+};
 
 /// A failure while resolving or securing per-user filesystem locations.
 #[derive(Debug, thiserror::Error)]
@@ -46,6 +52,9 @@ pub enum PlatformError {
         #[source]
         source: io::Error,
     },
+    /// Process identity or detachment setup failed.
+    #[error("process operation failed: {0}")]
+    Process(String),
 }
 
 pub(crate) fn io_error(path: &std::path::Path, source: io::Error) -> PlatformError {

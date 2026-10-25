@@ -20,6 +20,7 @@ muxyard-core = { path = "crates/core" }
 muxyard-contracts = { path = "crates/contracts" }
 muxyard-platform = { path = "crates/platform" }
 muxyard-storage = { path = "crates/storage" }
+ctrlc = { version = "3.5.2", features = ["termination"] }
 rusqlite = { version = "0.41.0", features = ["bundled"] }
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
