@@ -15,7 +15,7 @@ describe("workspace shell", () => {
     expect(html).toContain("Connecting to local host");
     expect(html).toContain("Remote off");
     expect(html).toContain("No pending attention");
-    expect(html).toContain("Not run");
+    expect(html).toContain("Inspector hidden");
     expect(html).toContain("Command palette");
     expect(html).toContain("not connected yet");
     expect(html).toContain("local terminal is available");
@@ -24,7 +24,7 @@ describe("workspace shell", () => {
   it("offers only local shell controls, not pretend terminal surfaces", () => {
     const html = renderToStaticMarkup(<App />);
     expect(html).toContain('aria-label="Hide sidebar"');
-    expect(html).toContain('aria-label="Hide inspector"');
+    expect(html).toContain('aria-label="Show inspector"');
     expect(html).toContain('aria-haspopup="dialog"');
     expect(html).not.toMatch(/<(iframe|canvas)\b/);
     expect(html).not.toMatch(/terminal is ready|agent is running/i);

@@ -130,7 +130,7 @@ export function CommandPalette({
           className="command-palette-input"
           type="text"
           value={query}
-          placeholder="Search layout and focus actions"
+          placeholder="Search layout, terminal, and focus actions"
           autoComplete="off"
           spellCheck={false}
           role="combobox"

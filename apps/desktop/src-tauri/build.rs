@@ -1,4 +1,4 @@
-//! Generate the native desktop configuration and capability metadata.
+pnpm build:host//! Generate the native desktop configuration and capability metadata.
 
 fn main() {
     tauri_build::build();

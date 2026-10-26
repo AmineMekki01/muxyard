@@ -193,10 +193,10 @@ describe("shell keyboard behavior", () => {
     expect(document.querySelector("#workspace-sidebar")).not.toBeNull();
 
     await act(async () => inspector.click());
-    expect(document.querySelector("#workspace-inspector")).toBeNull();
-    expect(inspector.getAttribute("aria-expanded")).toBe("false");
-    await act(async () => inspector.click());
     expect(document.querySelector("#workspace-inspector")).not.toBeNull();
+    expect(inspector.getAttribute("aria-expanded")).toBe("true");
+    await act(async () => inspector.click());
+    expect(document.querySelector("#workspace-inspector")).toBeNull();
   });
 
   it("does nothing privileged for an unknown palette query", async () => {

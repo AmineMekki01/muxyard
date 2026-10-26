@@ -15,7 +15,9 @@ otherwise it shows an honest empty workspace with live host connection status.
 foreground; `stop` and `status`
 manage the current user's host. The host opens private per-user configuration,
 logs, and a migrated SQLite database, and serves typed `host.status` requests
-over a Unix socket or Windows named pipe. The desktop bridge auto-launches the
+over a Unix socket or Windows named pipe. The host is detached and survives
+desktop exit by design; after rebuilding host code, run `muxyard-host stop`
+before relaunching so the new binary and PTY environment are loaded. The desktop bridge auto-launches the
 host when absent, checks protocol compatibility, and watches status without
 exposing the raw endpoint to the webview. Native PTY lifecycle, binary terminal
 stream framing, bounded per-client backpressure, and an xterm.js desktop
@@ -136,10 +138,35 @@ stream stays attached through idle periods instead of expiring with the control
 request timeout. Closing or unmounting the pane disposes the renderer and closes
 the host session.
 
+The workspace supports terminal tabs, side-by-side and stacked pane splits,
+draggable split ratios, maximize/restore, per-tab active-pane focus, close
+confirmation for running shells, tab rename/reorder, close-other-tabs, and
+keyboard navigation. Inactive tabs stay mounted so their PTYs continue receiving
+output; switching back refits and focuses the active pane. Resize-observer bursts
+are coalesced before fitting and notifying the host.
+
+The terminal chrome stays compact: a dark tab strip with a plus button and a
+terminal-actions menu, icon-only search/copy/maximize/close controls in each
+pane, and a search bar that appears only when requested. The inspector starts
+collapsed to keep terminal width available and can be opened from the top bar.
+
+The renderer uses SF Mono/Menlo at 14 px with a 1.35 line height, a bar cursor,
+and a truecolor ANSI palette. The host exports `COLORTERM`, `CLICOLOR`,
+`LSCOLORS`, and `LS_COLORS`, so `ls` differentiates folders, files, links, and
+executables. Shell prompt colors and command syntax highlighting still depend on
+the user's shell configuration.
+
+Pane titles follow the tab title (`test1 · 1`, `test1 · 2`), and a tab with a
+maximized pane shows a maximize indicator. Use the pane restore icon or the
+terminal-actions menu to show the split layout again. **Unsplit tab** closes the
+active pane and collapses its split after confirmation; the other panes stay
+open.
+
 The terminal starts in the host process working directory because project
-selection is not implemented yet. Scrollback is renderer-local and bounded;
-no terminal output is written to SQLite. Full-screen TUI/Unicode and native
-copy/selection smoke remain manual verification items.
+selection is not implemented yet. Tab and pane layout is in memory only; durable
+layout recovery and host-PTY reattachment are not implemented. Scrollback is
+renderer-local and bounded; no terminal output is written to SQLite. Full-screen
+TUI/Unicode and native copy/selection smoke remain manual verification items.
 
 The Tauri Rust bridge exposes typed `host_connect`, `host_status`,
 `host_watch`, `host_unwatch`, `terminal_spawn`, `terminal_input`,
@@ -282,13 +309,21 @@ The desktop shell supports local navigation without a host connection:
   programmatically focusable.
 - `Tab`/`Shift+Tab` stay inside an open overlay. Focus returns to the trigger
   after the overlay closes.
+- `Cmd/Ctrl+Shift+T` creates a terminal tab; `Cmd/Ctrl+Shift+D`/`E` split the
+  active pane right or down.
+- `Cmd/Ctrl+Shift+[ or ]` switch tabs; `Cmd/Ctrl+Shift+Arrow` switches panes.
+- `Cmd/Ctrl+Shift+W` closes the active pane after confirmation.
+- `Cmd/Ctrl+Shift+Z` maximizes or restores the active pane.
+- Double-click a tab to rename it; drag tabs to reorder; split dividers are
+  draggable and keyboard-resizable.
 
 The global shortcut listener ignores focused inputs, textareas, selects,
 `contenteditable` regions, `.xterm`, `[role="terminal"]`, and
-`[data-terminal-focus="true"]`. It never handles `Ctrl+C`, `Ctrl+D`, `Ctrl+Z`,
-`Escape`, mouse reporting, or Alt sequences on behalf of a terminal. The command
-palette contains only local layout, focus, and help actions; unknown queries do
-nothing privileged.
+`[data-terminal-focus="true"]`. Workspace shortcuts use Cmd/Ctrl+Shift and are
+handled by the terminal workspace itself. The app never handles `Ctrl+C`,
+`Ctrl+D`, `Ctrl+Z`, `Escape`, mouse reporting, or Alt sequences on behalf of a
+terminal. The command palette contains only local layout, terminal, focus, and
+help actions; unknown queries do nothing privileged.
 
 The shell uses in-memory layout state and does not persist preferences yet. The
 responsive breakpoints stack the main workspace, sidebar, and inspector on

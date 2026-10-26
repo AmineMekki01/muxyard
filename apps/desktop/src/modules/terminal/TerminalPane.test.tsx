@@ -22,6 +22,8 @@ const state = vi.hoisted(() => ({
     emitResize: (rows: number, cols: number) => void;
   },
   failWebgl: false,
+  fit: null as null | { fit: ReturnType<typeof vi.fn> },
+  search: null as null | { findNext: ReturnType<typeof vi.fn> },
   webgl: null as null | {
     dispose: ReturnType<typeof vi.fn>;
     triggerContextLoss: () => void;
@@ -43,6 +45,8 @@ vi.mock("@tauri-apps/api/core", () => ({
 
 vi.mock("@xterm/xterm", () => ({
   Terminal: class {
+    rows = 24;
+    cols = 80;
     write = vi.fn();
     dispose = vi.fn();
     focus = vi.fn();
@@ -77,12 +81,20 @@ vi.mock("@xterm/xterm", () => ({
 vi.mock("@xterm/addon-fit", () => ({
   FitAddon: class {
     fit = vi.fn();
+
+    constructor() {
+      state.fit = this as unknown as NonNullable<typeof state.fit>;
+    }
   },
 }));
 
 vi.mock("@xterm/addon-search", () => ({
   SearchAddon: class {
     findNext = vi.fn();
+
+    constructor() {
+      state.search = this as unknown as NonNullable<typeof state.search>;
+    }
   },
 }));
 
@@ -127,6 +139,8 @@ beforeEach(() => {
   state.channel = null;
   state.terminal = null;
   state.failWebgl = false;
+  state.fit = null;
+  state.search = null;
   state.webgl = null;
   state.invoke.mockImplementation((command: string, args: unknown) => {
     if (command === "terminal_spawn") {
@@ -156,12 +170,23 @@ afterEach(() => {
   vi.unstubAllGlobals();
 });
 
-async function mount() {
+async function setInput(input: HTMLInputElement, value: string) {
+  await act(async () => {
+    const setter = Object.getOwnPropertyDescriptor(
+      HTMLInputElement.prototype,
+      "value",
+    )?.set;
+    setter?.call(input, value);
+    input.dispatchEvent(new Event("input", { bubbles: true }));
+  });
+}
+
+async function mount(active = true) {
   host = document.createElement("div");
   document.body.append(host);
   root = createRoot(host);
   await act(async () => {
-    root?.render(<TerminalPane />);
+    root?.render(<TerminalPane active={active} />);
   });
   await vi.waitFor(() => {
     expect(state.invoke).toHaveBeenCalledWith(
@@ -184,6 +209,12 @@ describe("terminal pane", () => {
     );
     expect(state.terminal).not.toBeNull();
     expect(state.terminal?.focus).toHaveBeenCalled();
+    expect(state.invoke).toHaveBeenCalledWith(
+      "terminal_resize",
+      expect.objectContaining({
+        request: expect.objectContaining({ rows: 24, cols: 80 }),
+      }),
+    );
 
     const bytes = new Uint8Array([104, 105]);
     act(() => {
@@ -213,6 +244,43 @@ describe("terminal pane", () => {
         request: expect.objectContaining({ rows: 30, cols: 100 }),
       }),
     );
+  });
+
+  it("keeps hidden output and focuses only when activated", async () => {
+    await mount(false);
+    expect(state.terminal?.focus).not.toHaveBeenCalled();
+    const bytes = new Uint8Array([104, 105]);
+    act(() => {
+      state.channel?.onmessage(bytes.buffer);
+    });
+    expect(state.terminal?.write).toHaveBeenCalledWith(bytes);
+
+    state.fit?.fit.mockClear();
+    await act(async () => {
+      root?.render(<TerminalPane active />);
+    });
+    expect(state.terminal?.focus).toHaveBeenCalled();
+    expect(state.fit?.fit).toHaveBeenCalled();
+  });
+
+  it("opens the compact search bar and finds the next match", async () => {
+    await mount();
+    const searchButton = document.querySelector<HTMLButtonElement>(
+      '[aria-label="Search Local shell"]',
+    );
+    expect(searchButton).not.toBeNull();
+    await act(async () => searchButton?.click());
+    const input = document.querySelector<HTMLInputElement>(
+      '[aria-label="Search text in Local shell"]',
+    );
+    expect(input).not.toBeNull();
+    await setInput(input!, "needle");
+    await act(async () => {
+      input?.dispatchEvent(
+        new KeyboardEvent("keydown", { key: "Enter", bubbles: true }),
+      );
+    });
+    expect(state.search?.findNext).toHaveBeenCalledWith("needle");
   });
 
   it("falls back when WebGL is unavailable", async () => {

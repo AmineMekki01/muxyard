@@ -1,10 +1,13 @@
 /** Accessible workspace shell with local-only layout and focus actions. */
 
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 
 import { useHostConnection } from "../ipc/useHostConnection";
 import { hostStatusDetail } from "../ipc/host";
-import { TerminalPane } from "../modules/terminal/TerminalPane";
+import {
+  TerminalWorkspace,
+  type TerminalWorkspaceHandle,
+} from "../modules/terminal/TerminalWorkspace";
 import { CommandPalette } from "../ui/CommandPalette";
 import { HostBanner, HostStatusPill } from "../ui/HostStatus";
 import { ShortcutHelp } from "../ui/ShortcutHelp";
@@ -21,6 +24,7 @@ const COMMANDS = createCommands();
 export function AppShell() {
   const [paletteOpen, setPaletteOpen] = useState(false);
   const [helpOpen, setHelpOpen] = useState(false);
+  const terminalRef = useRef<TerminalWorkspaceHandle>(null);
   const { state: hostState, reconnect } = useHostConnection();
   const {
     activeRegion,
@@ -40,6 +44,17 @@ export function AppShell() {
     toggleInspector,
     focusRegion,
     openHelp: () => setHelpOpen(true),
+    newTerminalTab: () => terminalRef.current?.newTab(),
+    splitTerminal: (direction) => terminalRef.current?.splitActive(direction),
+    toggleTerminalZoom: () => terminalRef.current?.toggleZoom(),
+    closeTerminalPane: () => terminalRef.current?.requestCloseActivePane(),
+    closeOtherTerminalTabs: () => terminalRef.current?.requestCloseOtherTabs(),
+    moveActiveTerminalTab: (delta) => terminalRef.current?.moveActiveTab(delta),
+    nextTerminalTab: () => terminalRef.current?.nextTab(),
+    previousTerminalTab: () => terminalRef.current?.previousTab(),
+    nextTerminalPane: () => terminalRef.current?.nextPane(),
+    previousTerminalPane: () => terminalRef.current?.previousPane(),
+    renameActiveTerminalTab: () => terminalRef.current?.renameActiveTab(),
   };
 
   useEffect(() => {
@@ -177,7 +192,10 @@ export function AppShell() {
           <HostBanner state={hostState} onReconnect={reconnect} />
           {hostState.kind === "connected" ||
           hostState.kind === "reconnecting" ? (
-            <TerminalPane />
+            <TerminalWorkspace
+              ref={terminalRef}
+              shortcutsEnabled={!paletteOpen && !helpOpen}
+            />
           ) : (
             <div className="empty-content">
               <p className="eyebrow">Your workspace</p>

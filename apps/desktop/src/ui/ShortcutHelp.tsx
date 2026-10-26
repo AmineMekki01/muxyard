@@ -78,9 +78,10 @@ export function ShortcutHelp({ open, onClose }: ShortcutHelpProps) {
           ))}
         </dl>
         <p className="scope-note">
-          These shortcuts only apply outside a focused terminal or text field.
-          Terminal Ctrl+C, Ctrl+D, Ctrl+Z, Escape, mouse reporting, and Alt
-          sequences are left to the terminal.
+          Terminal tabs, splits, and pane navigation use Cmd/Ctrl+Shift
+          shortcuts. Ctrl+C, Ctrl+D, Ctrl+Z, Escape, mouse reporting, and Alt
+          sequences are left to the focused terminal. Text fields keep their
+          normal editing shortcuts.
         </p>
       </div>
     </div>

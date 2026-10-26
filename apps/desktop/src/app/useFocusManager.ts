@@ -6,7 +6,7 @@ import type { FocusRegion } from "./keymap";
 
 export function useFocusManager() {
   const [sidebarOpen, setSidebarOpen] = useState(true);
-  const [inspectorOpen, setInspectorOpen] = useState(true);
+  const [inspectorOpen, setInspectorOpen] = useState(false);
   const [activeRegion, setActiveRegion] = useState<FocusRegion | null>(null);
   const sidebarRef = useRef<HTMLElement>(null);
   const mainRef = useRef<HTMLElement>(null);

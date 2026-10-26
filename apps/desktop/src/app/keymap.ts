@@ -29,6 +29,41 @@ export const SHORTCUTS: readonly ShortcutDefinition[] = [
     label: "Move focus",
     description: "Cycle controls inside an open overlay.",
   },
+  {
+    keys: "Cmd/Ctrl+Shift+T",
+    label: "New terminal tab",
+    description: "Create a fresh shell in a new tab.",
+  },
+  {
+    keys: "Cmd/Ctrl+Shift+D / E",
+    label: "Split terminal",
+    description: "Split the active pane right or down.",
+  },
+  {
+    keys: "Cmd/Ctrl+Shift+W",
+    label: "Close active pane",
+    description: "Ask before terminating the pane's running shell.",
+  },
+  {
+    keys: "Cmd/Ctrl+Shift+Z",
+    label: "Maximize active pane",
+    description: "Show the active pane alone, or restore the split layout.",
+  },
+  {
+    keys: "Double-click tab",
+    label: "Rename tab",
+    description: "Edit the terminal tab title inline.",
+  },
+  {
+    keys: "Cmd/Ctrl+Shift+[ / ]",
+    label: "Switch tabs",
+    description: "Move to the previous or next terminal tab.",
+  },
+  {
+    keys: "Cmd/Ctrl+Shift+Arrow",
+    label: "Switch panes",
+    description: "Focus the previous or next pane in the active tab.",
+  },
 ];
 
 export function isPaletteShortcut(

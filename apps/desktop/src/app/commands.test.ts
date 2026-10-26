@@ -12,15 +12,26 @@ function context(): CommandContext {
     toggleInspector: vi.fn(),
     focusRegion: vi.fn(),
     openHelp: vi.fn(),
+    newTerminalTab: vi.fn(),
+    splitTerminal: vi.fn(),
+    toggleTerminalZoom: vi.fn(),
+    closeTerminalPane: vi.fn(),
+    closeOtherTerminalTabs: vi.fn(),
+    moveActiveTerminalTab: vi.fn(),
+    nextTerminalTab: vi.fn(),
+    previousTerminalTab: vi.fn(),
+    nextTerminalPane: vi.fn(),
+    previousTerminalPane: vi.fn(),
+    renameActiveTerminalTab: vi.fn(),
   };
 }
 
 describe("local command registry", () => {
-  it("contains only layout, focus, and help actions", () => {
+  it("contains only local layout, focus, terminal, and help actions", () => {
     const commands = createCommands();
     expect(commands.length).toBeGreaterThan(0);
     for (const command of commands) {
-      expect(command.id).toMatch(/^(layout|focus|help)\./);
+      expect(command.id).toMatch(/^(layout|focus|terminal|help)\./);
       expect(typeof command.run).toBe("function");
     }
     const ids = commands.map((command) => command.id);

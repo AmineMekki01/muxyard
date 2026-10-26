@@ -103,6 +103,7 @@ pub struct PtySession {
     killer: Box<dyn ChildKiller + Send + Sync>,
     child_pid: Option<u32>,
     exit: Arc<(Mutex<Option<PtyExitStatus>>, Condvar)>,
+    reader_gate: Arc<(Mutex<bool>, Condvar)>,
     reader_thread: Option<JoinHandle<()>>,
     wait_thread: Option<JoinHandle<()>>,
     hub: Arc<TerminalHub>,
@@ -112,6 +113,22 @@ pub struct PtySession {
 impl PtySession {
     /// Open a native PTY and launch the resolved shell into it.
     pub fn spawn(config: PtySessionConfig, hub: Arc<TerminalHub>) -> Result<Self, PtyError> {
+        Self::spawn_inner(config, hub, false)
+    }
+
+    /// Open a PTY whose output reader waits for the first subscriber.
+    pub(crate) fn spawn_deferred(
+        config: PtySessionConfig,
+        hub: Arc<TerminalHub>,
+    ) -> Result<Self, PtyError> {
+        Self::spawn_inner(config, hub, true)
+    }
+
+    fn spawn_inner(
+        config: PtySessionConfig,
+        hub: Arc<TerminalHub>,
+        defer_reader: bool,
+    ) -> Result<Self, PtyError> {
         if config.rows == 0 || config.cols == 0 {
             return Err(PtyError::InvalidSize);
         }
@@ -134,6 +151,16 @@ impl PtySession {
         let mut command = CommandBuilder::new(&shell);
         command.cwd(&cwd);
         command.env("TERM", "xterm-256color");
+        command.env("COLORTERM", "truecolor");
+        command.env("CLICOLOR", "1");
+        command.env("CLICOLOR_FORCE", "1");
+        command.env("LSCOLORS", "ExGxFxDxCxDxDxBxBxExEx");
+        command.env(
+            "LS_COLORS",
+            "di=1;34:ln=1;36:so=1;35:pi=33:ex=1;32:bd=1;33:cd=1;33:su=1;31:sg=1;31:tw=1;34:ow=1;34",
+        );
+        command.env("TERM_PROGRAM", "Muxyard");
+        command.env("TERM_PROGRAM_VERSION", env!("CARGO_PKG_VERSION"));
         for (key, value) in config.environment {
             command.env(key, value);
         }
@@ -166,10 +193,20 @@ impl PtySession {
         let master = pair.master;
 
         let exit = Arc::new((Mutex::new(None), Condvar::new()));
+        let reader_gate = Arc::new((Mutex::new(!defer_reader), Condvar::new()));
         let reader_hub = Arc::clone(&hub);
+        let reader_gate_thread = Arc::clone(&reader_gate);
         let reader_thread = match thread::Builder::new()
             .name("muxyard-pty-reader".to_string())
             .spawn(move || {
+                let (gate, ready) = &*reader_gate_thread;
+                let mut started = gate.lock().unwrap_or_else(|poisoned| poisoned.into_inner());
+                while !*started {
+                    started = ready
+                        .wait(started)
+                        .unwrap_or_else(|poisoned| poisoned.into_inner());
+                }
+                drop(started);
                 let mut reader = reader;
                 let mut buffer = [0_u8; READ_CHUNK_BYTES];
                 loop {
@@ -220,6 +257,7 @@ impl PtySession {
             killer,
             child_pid,
             exit,
+            reader_gate,
             reader_thread: Some(reader_thread),
             wait_thread: Some(wait_thread),
             hub,
@@ -239,6 +277,15 @@ impl PtySession {
             shell: self.shell.clone(),
             cwd: self.cwd.clone(),
         }
+    }
+
+    /// Allow the output reader to drain buffered PTY output.
+    pub(crate) fn start_reader(&self) {
+        let (started, ready) = &*self.reader_gate;
+        *started
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner()) = true;
+        ready.notify_all();
     }
 
     /// Resolved shell executable.
@@ -337,6 +384,7 @@ impl PtySession {
         self.writer.take();
         self.master.take();
         self.hub.remove_session(self.stream_id);
+        self.start_reader();
         if let Some(thread) = self.reader_thread.take() {
             let _ = thread.join();
         }

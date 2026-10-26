@@ -48,7 +48,7 @@ impl TerminalService {
             None => std::env::current_dir().map_err(PtyError::Io)?,
         };
         let shell = request.shell.map(PathBuf::from);
-        let session = PtySession::spawn(
+        let session = PtySession::spawn_deferred(
             PtySessionConfig {
                 shell,
                 cwd,
@@ -122,7 +122,15 @@ impl TerminalService {
         stream_id: Uuid,
         queue_bytes: Option<u32>,
     ) -> Result<TerminalSubscription, TerminalServiceError> {
-        Ok(self.hub.subscribe(stream_id, queue_bytes)?)
+        let subscription = self.hub.subscribe(stream_id, queue_bytes)?;
+        let sessions = self
+            .sessions
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
+        if let Some(session) = sessions.get(&stream_id) {
+            session.start_reader();
+        }
+        Ok(subscription)
     }
 
     /// Number of live sessions.

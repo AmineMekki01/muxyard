@@ -3,7 +3,8 @@
 #![cfg(unix)]
 
 use std::{
-    sync::Arc,
+    sync::{Arc, mpsc},
+    thread,
     time::{Duration, Instant},
 };
 
@@ -229,6 +230,86 @@ fn restart_after_close_and_missing_shell_are_bounded() {
         .unwrap();
     assert!(matches!(closed, IpcResponse::Ok { .. }));
     assert_eq!(service.session_count(), 0);
+    drop(control);
+    server.stop();
+}
+
+#[test]
+fn buffered_output_is_delivered_after_first_attach() {
+    let (temp, paths) = test_paths();
+    let hub = Arc::new(TerminalHub::new(TerminalLimits::default()).unwrap());
+    let service = Arc::new(TerminalService::new(hub));
+    let mut server =
+        IpcServer::start_with_terminal_service(&paths, sample_status(), Arc::clone(&service))
+            .unwrap();
+    let mut control = IpcClient::connect(&paths).unwrap();
+    let spawned: IpcResponse<TerminalSpawnResponse> = control
+        .request(TERMINAL_SPAWN_METHOD, spawn_request(temp.path()))
+        .unwrap();
+    let spawned = match spawned {
+        IpcResponse::Ok { data } => data,
+        IpcResponse::Error { error } => panic!("spawn failed: {error}"),
+    };
+
+    let input: IpcResponse<()> = control
+        .request(
+            TERMINAL_INPUT_METHOD,
+            TerminalInputRequest {
+                stream_id: spawned.stream_id.clone(),
+                data: "printf 'deferred-initial-ok\\n'\n".to_string(),
+            },
+        )
+        .unwrap();
+    assert!(matches!(input, IpcResponse::Ok { .. }));
+    thread::sleep(Duration::from_millis(250));
+
+    let stream_id = Uuid::parse_str(&spawned.stream_id.0).unwrap();
+    let terminal = IpcClient::connect(&paths)
+        .unwrap()
+        .attach_terminal(stream_id, None)
+        .unwrap();
+    let (sender, receiver) = mpsc::channel();
+    thread::spawn(move || {
+        let mut terminal = terminal;
+        let mut output = Vec::new();
+        loop {
+            match terminal.next_frame() {
+                Ok(frame) => {
+                    output.extend_from_slice(frame.payload());
+                    if output
+                        .windows(b"deferred-initial-ok".len())
+                        .any(|window| window == b"deferred-initial-ok")
+                    {
+                        let _ = sender.send(Ok(output));
+                        break;
+                    }
+                }
+                Err(error) => {
+                    let _ = sender.send(Err(error.to_string()));
+                    break;
+                }
+            }
+        }
+    });
+    let output = receiver
+        .recv_timeout(Duration::from_secs(3))
+        .expect("timed out waiting for deferred terminal output")
+        .expect("terminal stream failed");
+    assert!(
+        String::from_utf8_lossy(&output).contains("deferred-initial-ok"),
+        "missing deferred output: {:?}",
+        String::from_utf8_lossy(&output)
+    );
+
+    let closed: IpcResponse<()> = control
+        .request(
+            TERMINAL_CLOSE_METHOD,
+            TerminalCloseRequest {
+                stream_id: spawned.stream_id,
+            },
+        )
+        .unwrap();
+    assert!(matches!(closed, IpcResponse::Ok { .. }));
     drop(control);
     server.stop();
 }

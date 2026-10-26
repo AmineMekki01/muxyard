@@ -3,6 +3,7 @@
 #![cfg(unix)]
 
 use std::{
+    fs,
     path::PathBuf,
     sync::Arc,
     thread,
@@ -86,6 +87,51 @@ fn shell_echo_and_cwd_are_visible() {
 
     session.close().unwrap();
     assert_eq!(hub.session_count(), 0);
+}
+
+#[test]
+fn shell_receives_terminal_color_defaults() {
+    let temp = tempfile::tempdir().unwrap();
+    let hub = hub();
+    let mut session = spawn(&hub, temp.path().to_path_buf());
+    let subscription = subscribe(&hub, &session);
+
+    session
+        .write(
+            br#"printf '%s|%s|%s|%s|%s\n' "$CLICOLOR" "$COLORTERM" "$TERM_PROGRAM" "$LSCOLORS" "$LS_COLORS"
+"#,
+        )
+        .unwrap();
+    let output = read_until(
+        &subscription,
+        b"1|truecolor|Muxyard|ExGxFxDxCxDxDxBxBxExEx|",
+        Duration::from_secs(5),
+    );
+    let text = String::from_utf8_lossy(&output);
+    assert!(
+        text.contains("1|truecolor|Muxyard|ExGxFxDxCxDxDxBxBxExEx|"),
+        "missing terminal color environment: {text:?}"
+    );
+    session.close().unwrap();
+}
+
+#[test]
+fn ls_output_contains_color_sequences() {
+    let temp = tempfile::tempdir().unwrap();
+    fs::create_dir(temp.path().join("folder")).unwrap();
+    fs::write(temp.path().join("file.txt"), b"x").unwrap();
+    let hub = hub();
+    let mut session = spawn(&hub, temp.path().to_path_buf());
+    let subscription = subscribe(&hub, &session);
+
+    session.write(b"ls\n").unwrap();
+    let output = read_until(&subscription, b"file.txt", Duration::from_secs(5));
+    assert!(
+        output.windows(2).any(|window| window == b"\x1b["),
+        "ls output did not contain ANSI color sequences: {:?}",
+        String::from_utf8_lossy(&output)
+    );
+    session.close().unwrap();
 }
 
 #[test]
