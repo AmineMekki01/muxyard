@@ -1,6 +1,7 @@
 //! Native PTY-backed shell sessions.
 
 use std::{
+    collections::VecDeque,
     ffi::OsString,
     io::{self, Read, Write},
     path::PathBuf,
@@ -19,6 +20,7 @@ use uuid::Uuid;
 use crate::{TerminalHub, TerminalHubError};
 
 const READ_CHUNK_BYTES: usize = 16 * 1024;
+const OUTPUT_TAIL_BYTES: usize = 128 * 1024;
 
 /// Validated shell launch settings.
 #[derive(Debug, Clone)]
@@ -107,6 +109,7 @@ pub struct PtySession {
     reader_thread: Option<JoinHandle<()>>,
     wait_thread: Option<JoinHandle<()>>,
     hub: Arc<TerminalHub>,
+    output_tail: Arc<Mutex<VecDeque<u8>>>,
     closed: bool,
 }
 
@@ -194,7 +197,9 @@ impl PtySession {
 
         let exit = Arc::new((Mutex::new(None), Condvar::new()));
         let reader_gate = Arc::new((Mutex::new(!defer_reader), Condvar::new()));
+        let output_tail = Arc::new(Mutex::new(VecDeque::with_capacity(OUTPUT_TAIL_BYTES)));
         let reader_hub = Arc::clone(&hub);
+        let reader_tail = Arc::clone(&output_tail);
         let reader_gate_thread = Arc::clone(&reader_gate);
         let reader_thread = match thread::Builder::new()
             .name("muxyard-pty-reader".to_string())
@@ -213,7 +218,15 @@ impl PtySession {
                     match reader.read(&mut buffer) {
                         Ok(0) => break,
                         Ok(count) => {
-                            if reader_hub.publish(stream_id, &buffer[..count]).is_err() {
+                            let chunk = &buffer[..count];
+                            if let Ok(mut tail) = reader_tail.lock() {
+                                tail.extend(chunk.iter().copied());
+                                if tail.len() > OUTPUT_TAIL_BYTES {
+                                    let excess = tail.len() - OUTPUT_TAIL_BYTES;
+                                    tail.drain(..excess);
+                                }
+                            }
+                            if reader_hub.publish(stream_id, chunk).is_err() {
                                 break;
                             }
                         }
@@ -261,6 +274,7 @@ impl PtySession {
             reader_thread: Some(reader_thread),
             wait_thread: Some(wait_thread),
             hub,
+            output_tail,
             closed: false,
         })
     }
@@ -286,6 +300,16 @@ impl PtySession {
             .lock()
             .unwrap_or_else(|poisoned| poisoned.into_inner()) = true;
         ready.notify_all();
+    }
+
+    /// Recent output bytes retained for renderer reattachment.
+    pub fn snapshot(&self) -> Vec<u8> {
+        self.output_tail
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner())
+            .iter()
+            .copied()
+            .collect()
     }
 
     /// Resolved shell executable.

@@ -23,6 +23,9 @@ pub const TERMINAL_RESIZE_METHOD: &str = "terminal.resize";
 /// Method name for closing a terminal session.
 pub const TERMINAL_CLOSE_METHOD: &str = "terminal.close";
 
+/// Method name for reading a bounded recent output tail.
+pub const TERMINAL_SNAPSHOT_METHOD: &str = "terminal.snapshot";
+
 /// Success or typed failure for one local request.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(tag = "status", rename_all = "lowercase", deny_unknown_fields)]
@@ -50,3 +53,17 @@ impl<T> IpcResponse<T> {
         Self::Error { error }
     }
 }
+
+/// Host-owned persistence for the desktop workspace layout.
+pub trait WorkspaceLayoutStore: Send + Sync {
+    /// Load the saved layout and host identity metadata.
+    fn load_layout(&self) -> Result<muxyard_contracts::WorkspaceLayoutSnapshot, String>;
+    /// Persist the layout for the current host.
+    fn save_layout(&self, layout: &muxyard_contracts::WorkspaceLayout) -> Result<(), String>;
+}
+
+/// Method name for reading the persisted workspace layout.
+pub const WORKSPACE_LAYOUT_GET_METHOD: &str = "workspace.layout.get";
+
+/// Method name for saving the workspace layout.
+pub const WORKSPACE_LAYOUT_SAVE_METHOD: &str = "workspace.layout.save";

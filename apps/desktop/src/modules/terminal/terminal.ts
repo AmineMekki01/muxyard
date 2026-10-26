@@ -5,8 +5,12 @@ import type {
   TerminalCloseRequest,
   TerminalInputRequest,
   TerminalResizeRequest,
+  TerminalSnapshotRequest,
+  TerminalSnapshotResponse,
   TerminalSpawnRequest,
   TerminalSpawnResponse,
+  WorkspaceLayout,
+  WorkspaceLayoutSnapshot,
 } from "@muxyard/contracts";
 
 export async function spawnTerminal(
@@ -43,7 +47,24 @@ export async function resizeTerminal(
   await invoke("terminal_resize", { request });
 }
 
+export async function snapshotTerminal(
+  streamId: string,
+): Promise<TerminalSnapshotResponse> {
+  const request: TerminalSnapshotRequest = { stream_id: streamId };
+  return invoke<TerminalSnapshotResponse>("terminal_snapshot", { request });
+}
+
 export async function closeTerminal(streamId: string): Promise<void> {
   const request: TerminalCloseRequest = { stream_id: streamId };
   await invoke("terminal_close", { request });
+}
+
+export async function getWorkspaceLayout(): Promise<WorkspaceLayoutSnapshot> {
+  return invoke<WorkspaceLayoutSnapshot>("workspace_layout_get");
+}
+
+export async function saveWorkspaceLayout(
+  layout: WorkspaceLayout,
+): Promise<void> {
+  await invoke("workspace_layout_save", { layout });
 }

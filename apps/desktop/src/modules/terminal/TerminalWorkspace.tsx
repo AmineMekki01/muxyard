@@ -11,6 +11,8 @@ import {
   type PointerEvent as ReactPointerEvent,
 } from "react";
 
+import type { TerminalSpawnResponse } from "@muxyard/contracts";
+
 import { isEditableTarget } from "../../app/keymap";
 import { trapTabKey, useDialogFocus } from "../../ui/dialogFocus";
 import { TerminalIcon } from "./TerminalIcon";
@@ -26,10 +28,21 @@ import {
   paneCount,
   setSplitRatio,
   splitNode,
+  updateLeaf,
   type LayoutNode,
   type SplitDirection,
   type TerminalTab,
 } from "./layout";
+import {
+  fromWorkspaceLayout,
+  markSavedSessionsLost,
+  toWorkspaceLayout,
+} from "./persistence";
+import {
+  closeTerminal,
+  getWorkspaceLayout,
+  saveWorkspaceLayout,
+} from "./terminal";
 
 type WorkspaceState = {
   tabs: TerminalTab[];
@@ -88,6 +101,13 @@ type PaneLayoutProps = {
   onClose: (tabId: string, paneId: string) => void;
   onToggleZoom: (tabId: string, paneId: string) => void;
   onRatioChange: (tabId: string, splitId: string, ratio: number) => void;
+  onSession: (
+    tabId: string,
+    paneId: string,
+    info: TerminalSpawnResponse,
+  ) => void;
+  onLost: (tabId: string, paneId: string) => void;
+  onViewport: (tabId: string, paneId: string, offset: number) => void;
 };
 
 function PaneLayout({
@@ -98,6 +118,9 @@ function PaneLayout({
   onClose,
   onToggleZoom,
   onRatioChange,
+  onSession,
+  onLost,
+  onViewport,
 }: PaneLayoutProps) {
   if (node.kind === "leaf") {
     const zoomHidden = Boolean(
@@ -121,6 +144,15 @@ function PaneLayout({
         onFocus={() => onFocus(tab.id, node.id)}
         onClose={() => onClose(tab.id, node.id)}
         onToggleZoom={() => onToggleZoom(tab.id, node.id)}
+        sessionId={node.sessionId}
+        sessionLost={node.sessionLost}
+        historyId={node.historyId}
+        cwd={node.cwd}
+        shell={node.shell}
+        scrollOffset={node.scrollOffset}
+        onViewport={(offset) => onViewport(tab.id, node.id, offset)}
+        onSession={(info) => onSession(tab.id, node.id, info)}
+        onLost={() => onLost(tab.id, node.id)}
       />
     );
   }
@@ -148,6 +180,9 @@ function PaneLayout({
           onClose={onClose}
           onToggleZoom={onToggleZoom}
           onRatioChange={onRatioChange}
+          onSession={onSession}
+          onLost={onLost}
+          onViewport={onViewport}
         />
       </div>
       <SplitDivider
@@ -169,6 +204,9 @@ function PaneLayout({
           onClose={onClose}
           onToggleZoom={onToggleZoom}
           onRatioChange={onRatioChange}
+          onSession={onSession}
+          onLost={onLost}
+          onViewport={onViewport}
         />
       </div>
     </div>
@@ -275,11 +313,22 @@ function createInitialWorkspace(): WorkspaceState {
   return { tabs: [tab], activeTabId: tab.id };
 }
 
+function closeTabSessions(tab: TerminalTab) {
+  for (const leaf of listLeaves(tab.root)) {
+    if (leaf.sessionId) void closeTerminal(leaf.sessionId).catch(() => {});
+  }
+}
+
 export const TerminalWorkspace = forwardRef<
   TerminalWorkspaceHandle,
   TerminalWorkspaceProps
 >(function TerminalWorkspace({ shortcutsEnabled = true }, ref) {
-  const [workspace, setWorkspace] = useState(createInitialWorkspace);
+  const [workspace, setWorkspace] = useState<WorkspaceState>({
+    tabs: [],
+    activeTabId: null,
+  });
+  const [loaded, setLoaded] = useState(false);
+  const [immediateSave, setImmediateSave] = useState(0);
   const [pendingClose, setPendingClose] = useState<PendingClose | null>(null);
   const [editingTabId, setEditingTabId] = useState<string | null>(null);
   const [tabDraft, setTabDraft] = useState("");
@@ -291,6 +340,61 @@ export const TerminalWorkspace = forwardRef<
     workspace.tabs.find((tab) => tab.id === workspace.activeTabId) ?? null;
 
   useEffect(() => {
+    let cancelled = false;
+    void getWorkspaceLayout()
+      .then((snapshot) => {
+        if (cancelled) return;
+        if (!snapshot.layout) {
+          setWorkspace(createInitialWorkspace());
+          setLoaded(true);
+          return;
+        }
+        const loadedLayout = fromWorkspaceLayout(snapshot.layout);
+        const hostMatches =
+          snapshot.layout_host_instance_id === snapshot.host_instance_id &&
+          snapshot.layout_process_start === snapshot.process_start;
+        const tabs = hostMatches
+          ? loadedLayout.tabs
+          : markSavedSessionsLost(loadedLayout.tabs);
+        nextNumber.current = Math.max(2, tabs.length + 1);
+        setWorkspace({ tabs, activeTabId: loadedLayout.activeTabId });
+        setLoaded(true);
+      })
+      .catch(() => {
+        if (cancelled) return;
+        setWorkspace(createInitialWorkspace());
+        setLoaded(true);
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, []);
+
+  useEffect(() => {
+    if (!loaded) return;
+    void saveWorkspaceLayout(
+      toWorkspaceLayout(workspace.tabs, workspace.activeTabId),
+    ).catch(() => {});
+  }, [loaded]);
+
+  useEffect(() => {
+    if (!loaded || immediateSave === 0) return;
+    void saveWorkspaceLayout(
+      toWorkspaceLayout(workspace.tabs, workspace.activeTabId),
+    ).catch(() => {});
+  }, [immediateSave, loaded]);
+
+  useEffect(() => {
+    if (!loaded) return;
+    const timer = setTimeout(() => {
+      void saveWorkspaceLayout(
+        toWorkspaceLayout(workspace.tabs, workspace.activeTabId),
+      ).catch(() => {});
+    }, 200);
+    return () => clearTimeout(timer);
+  }, [workspace, loaded]);
+
+  useEffect(() => {
     if (!editingTabId) return;
     renameInputRef.current?.focus();
     renameInputRef.current?.select();
@@ -300,10 +404,16 @@ export const TerminalWorkspace = forwardRef<
     tabId: string,
     update: (tab: TerminalTab) => TerminalTab,
   ) => {
-    setWorkspace((previous) => ({
-      ...previous,
-      tabs: previous.tabs.map((tab) => (tab.id === tabId ? update(tab) : tab)),
-    }));
+    setWorkspace((previous) => {
+      let changed = false;
+      const tabs = previous.tabs.map((tab) => {
+        if (tab.id !== tabId) return tab;
+        const next = update(tab);
+        changed = changed || next !== tab;
+        return next;
+      });
+      return changed ? { ...previous, tabs } : previous;
+    });
   };
 
   const newTab = () => {
@@ -369,14 +479,14 @@ export const TerminalWorkspace = forwardRef<
   const activatePane = (tabId: string, paneId: string) => {
     updateTab(tabId, (tab) => {
       if (!findLeaf(tab.root, paneId)) return tab;
-      return {
-        ...tab,
-        activePaneId: paneId,
-        zoomedPaneId:
-          tab.zoomedPaneId && tab.zoomedPaneId !== paneId
-            ? null
-            : tab.zoomedPaneId,
-      };
+      const zoomedPaneId =
+        tab.zoomedPaneId && tab.zoomedPaneId !== paneId
+          ? null
+          : tab.zoomedPaneId;
+      if (tab.activePaneId === paneId && tab.zoomedPaneId === zoomedPaneId) {
+        return tab;
+      }
+      return { ...tab, activePaneId: paneId, zoomedPaneId };
     });
   };
 
@@ -425,6 +535,49 @@ export const TerminalWorkspace = forwardRef<
     updateTab(tabId, (tab) => ({
       ...tab,
       root: setSplitRatio(tab.root, splitId, ratio),
+    }));
+  };
+
+  const updatePaneSession = (
+    tabId: string,
+    paneId: string,
+    info: TerminalSpawnResponse,
+  ) => {
+    updateTab(tabId, (tab) => ({
+      ...tab,
+      root: updateLeaf(tab.root, paneId, (leaf) => ({
+        ...leaf,
+        sessionId: info.stream_id,
+        cwd: info.cwd,
+        shell: info.shell,
+        scrollOffset: 0,
+        sessionLost: false,
+      })),
+    }));
+    setImmediateSave((current) => current + 1);
+  };
+
+  const markPaneLost = (tabId: string, paneId: string) => {
+    updateTab(tabId, (tab) => ({
+      ...tab,
+      root: updateLeaf(tab.root, paneId, (leaf) => ({
+        ...leaf,
+        sessionLost: true,
+      })),
+    }));
+    setImmediateSave((current) => current + 1);
+  };
+
+  const updatePaneViewport = (
+    tabId: string,
+    paneId: string,
+    offset: number,
+  ) => {
+    updateTab(tabId, (tab) => ({
+      ...tab,
+      root: updateLeaf(tab.root, paneId, (leaf) =>
+        leaf.scrollOffset === offset ? leaf : { ...leaf, scrollOffset: offset },
+      ),
     }));
   };
 
@@ -499,6 +652,20 @@ export const TerminalWorkspace = forwardRef<
     const close = pendingClose;
     if (!close) return;
     setPendingClose(null);
+    const closingTab = workspace.tabs.find((tab) => tab.id === close.tabId);
+    if (close.kind === "tab" && closingTab) {
+      closeTabSessions(closingTab);
+    } else if (close.kind === "others") {
+      for (const tab of workspace.tabs) {
+        if (tab.id !== close.tabId) closeTabSessions(tab);
+      }
+    } else if (
+      closingTab &&
+      (close.kind === "pane" || close.kind === "unsplit")
+    ) {
+      const leaf = findLeaf(closingTab.root, close.paneId);
+      if (leaf?.sessionId) void closeTerminal(leaf.sessionId).catch(() => {});
+    }
     setWorkspace((previous) => {
       if (close.kind === "others") {
         const tabs = previous.tabs.filter((tab) => tab.id === close.tabId);
@@ -705,6 +872,16 @@ export const TerminalWorkspace = forwardRef<
     },
   ];
 
+  if (!loaded) {
+    return (
+      <section className="terminal-workspace" aria-label="Terminal workspace">
+        <div className="terminal-empty">
+          <p>Restoring terminal layout…</p>
+        </div>
+      </section>
+    );
+  }
+
   return (
     <section
       className="terminal-workspace"
@@ -835,6 +1012,9 @@ export const TerminalWorkspace = forwardRef<
               onClose={requestClosePane}
               onToggleZoom={togglePaneZoom}
               onRatioChange={updateSplitRatio}
+              onSession={updatePaneSession}
+              onLost={markPaneLost}
+              onViewport={updatePaneViewport}
             />
           </div>
         ))}

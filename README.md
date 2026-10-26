@@ -124,8 +124,10 @@ to 64 KiB of payload. Each attached client has a bounded 1–4 MiB write queue; 
 slow subscriber is detached without blocking other subscribers or the control
 listener. The codec defines input, resize, end, flow-control, and ACK kinds.
 The host exposes typed `terminal.spawn`, `terminal.input`, `terminal.resize`,
-and `terminal.close` control methods. The Tauri Rust bridge forwards them to the
-host and streams binary output through a raw Tauri Channel.
+`terminal.close`, and `terminal.snapshot` control methods, plus
+`workspace.layout.get`/`workspace.layout.save` for the terminal layout. The Tauri
+Rust bridge forwards them to the host and streams binary output through a raw
+Tauri Channel.
 
 ## Desktop Terminal
 
@@ -135,8 +137,9 @@ and close commands are typed Tauri commands; WebGL is attempted with a DOM
 fallback on construction or context loss. Fit and Search addons are loaded, and
 the pane exposes selection copying, search-next, and a retry action. The output
 stream stays attached through idle periods instead of expiring with the control
-request timeout. Closing or unmounting the pane disposes the renderer and closes
-the host session.
+request timeout. Unmounting the renderer detaches only; an explicit pane or tab
+close terminates the host session, while closing the desktop window leaves the
+host PTY alive for reattachment.
 
 The workspace supports terminal tabs, side-by-side and stacked pane splits,
 draggable split ratios, maximize/restore, per-tab active-pane focus, close
@@ -162,15 +165,21 @@ terminal-actions menu to show the split layout again. **Unsplit tab** closes the
 active pane and collapses its split after confirmation; the other panes stay
 open.
 
-The terminal starts in the host process working directory because project
-selection is not implemented yet. Tab and pane layout is in memory only; durable
-layout recovery and host-PTY reattachment are not implemented. Scrollback is
-renderer-local and bounded; no terminal output is written to SQLite. Full-screen
-TUI/Unicode and native copy/selection smoke remain manual verification items.
+Tabs, splits, active/zoomed panes, cwd/shell hints, stable session IDs, and each
+pane's scroll offset are persisted through host SQLite. After a desktop restart with the same live host,
+the app reattaches the same PTY and writes a bounded recent-output snapshot into
+xterm before attaching live output. After a host restart, stale sessions show
+an explicit **This terminal session is no longer running** pane with **Start new
+shell**; they are never presented as recovered. Corrupt layout JSON resets only
+the layout. The terminal starts in the host process working directory because
+project selection is not implemented yet. Scrollback is renderer-local and
+bounded; no terminal output is written to SQLite. Full-screen TUI/Unicode and
+native copy/selection smoke remain manual verification items.
 
 The Tauri Rust bridge exposes typed `host_connect`, `host_status`,
 `host_watch`, `host_unwatch`, `terminal_spawn`, `terminal_input`,
-`terminal_resize`, `terminal_close`, and `terminal_attach` commands. It checks
+`terminal_resize`, `terminal_close`, `terminal_snapshot`, `terminal_attach`,
+`workspace_layout_get`, and `workspace_layout_save` commands. It checks
 protocol version 1, shows
 host starting/ready/reconnecting/offline/incompatible states, and retries status
 a bounded number of times before reporting `HOST_OFFLINE`. The status watcher
@@ -325,9 +334,13 @@ handled by the terminal workspace itself. The app never handles `Ctrl+C`,
 terminal. The command palette contains only local layout, terminal, focus, and
 help actions; unknown queries do nothing privileged.
 
-The shell uses in-memory layout state and does not persist preferences yet. The
-responsive breakpoints stack the main workspace, sidebar, and inspector on
-narrow windows; native resize verification remains a manual smoke test.
+Terminal layout and session identities are persisted; other shell preferences
+are still in memory. Each terminal pane has an isolated shell history file, so
+commands from different panes do not mix and a replacement shell in the same
+pane reloads that pane's history. Ctrl+R remains scoped to the active pane; a
+merged cross-terminal history browser is not implemented. The responsive
+breakpoints stack the main workspace, sidebar, and inspector on narrow windows;
+native resize verification remains a manual smoke test.
 
 ## Shared Contracts
 

@@ -19,4 +19,6 @@ pub use hub::{
     TerminalSubscription,
 };
 pub use pty::{PtyError, PtyExitStatus, PtySession, PtySessionConfig, PtySessionIdentity};
-pub use service::{TerminalService, TerminalServiceError};
+pub use service::{
+    TerminalService, TerminalServiceError, TerminalSessionStore, TerminalStoreError,
+};

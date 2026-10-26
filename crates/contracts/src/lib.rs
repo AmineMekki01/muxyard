@@ -8,14 +8,20 @@ mod errors;
 mod host;
 mod models;
 mod terminal;
+mod workspace;
 
 pub use control::{ControlEnvelope, ControlMessageType, decode_control};
 pub use errors::{ApiError, ErrorCode};
 pub use host::{HostStatusEvent, HostStatusRequest, HostStatusResponse};
 pub use models::{AgentStatus, ExecutionEnvironment, Id, TaskState};
 pub use terminal::{
-    TerminalCloseRequest, TerminalInputRequest, TerminalResizeRequest, TerminalSpawnRequest,
-    TerminalSpawnResponse,
+    TerminalCloseRequest, TerminalInputRequest, TerminalResizeRequest, TerminalSnapshotRequest,
+    TerminalSnapshotResponse, TerminalSpawnRequest, TerminalSpawnResponse,
+};
+pub use workspace::{
+    MAX_WORKSPACE_LAYOUT_BYTES, TerminalLayoutNode, TerminalSplitDirection, TerminalTabLayout,
+    WorkspaceLayout, WorkspaceLayoutGetRequest, WorkspaceLayoutSaveRequest,
+    WorkspaceLayoutSnapshot,
 };
 
 use serde::{Deserialize, Deserializer, Serialize, Serializer, de};

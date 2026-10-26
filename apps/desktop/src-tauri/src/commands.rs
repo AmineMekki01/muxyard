@@ -10,7 +10,8 @@ use std::{
 
 use muxyard_contracts::{
     ApiError, HostStatusEvent, HostStatusResponse, TerminalCloseRequest, TerminalInputRequest,
-    TerminalResizeRequest, TerminalSpawnRequest, TerminalSpawnResponse,
+    TerminalResizeRequest, TerminalSnapshotRequest, TerminalSnapshotResponse, TerminalSpawnRequest,
+    TerminalSpawnResponse, WorkspaceLayout, WorkspaceLayoutSnapshot,
 };
 use muxyard_terminal::TerminalFrameKind;
 use tauri::{
@@ -131,6 +132,36 @@ pub async fn terminal_close(request: TerminalCloseRequest) -> Result<(), ApiErro
     })
     .await
     .map_err(|_| internal("Terminal close task failed."))?
+}
+
+/// Read recent output for a restored terminal renderer.
+#[tauri::command]
+pub async fn terminal_snapshot(
+    request: TerminalSnapshotRequest,
+) -> Result<TerminalSnapshotResponse, ApiError> {
+    tauri::async_runtime::spawn_blocking(move || {
+        HostBridge::for_current_user()?.terminal_snapshot(request)
+    })
+    .await
+    .map_err(|_| internal("Terminal snapshot task failed."))?
+}
+
+/// Read the persisted workspace layout.
+#[tauri::command]
+pub async fn workspace_layout_get() -> Result<WorkspaceLayoutSnapshot, ApiError> {
+    tauri::async_runtime::spawn_blocking(|| HostBridge::for_current_user()?.workspace_layout_get())
+        .await
+        .map_err(|_| internal("Workspace layout load task failed."))?
+}
+
+/// Persist the workspace layout.
+#[tauri::command]
+pub async fn workspace_layout_save(layout: WorkspaceLayout) -> Result<(), ApiError> {
+    tauri::async_runtime::spawn_blocking(move || {
+        HostBridge::for_current_user()?.workspace_layout_save(layout)
+    })
+    .await
+    .map_err(|_| internal("Workspace layout save task failed."))?
 }
 
 /// Attach a terminal session and stream raw PTY output through a Tauri Channel.

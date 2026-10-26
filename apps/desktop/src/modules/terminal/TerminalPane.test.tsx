@@ -18,8 +18,11 @@ const state = vi.hoisted(() => ({
     dispose: ReturnType<typeof vi.fn>;
     focus: ReturnType<typeof vi.fn>;
     open: ReturnType<typeof vi.fn>;
+    scrollToLine: ReturnType<typeof vi.fn>;
+    buffer: { active: { baseY: number; viewportY: number } };
     emitData: (data: string) => void;
     emitResize: (rows: number, cols: number) => void;
+    emitScroll: () => void;
   },
   failWebgl: false,
   fit: null as null | { fit: ReturnType<typeof vi.fn> },
@@ -52,7 +55,10 @@ vi.mock("@xterm/xterm", () => ({
     focus = vi.fn();
     open = vi.fn();
     getSelection = vi.fn(() => "selected text");
+    buffer = { active: { baseY: 10, viewportY: 10 } };
+    scrollToLine = vi.fn();
     private dataHandler: ((data: string) => void) | null = null;
+    private scrollHandler: (() => void) | null = null;
     private resizeHandler:
       ((size: { rows: number; cols: number }) => void) | null = null;
 
@@ -68,6 +74,13 @@ vi.mock("@xterm/xterm", () => ({
     onResize(handler: (size: { rows: number; cols: number }) => void) {
       this.resizeHandler = handler;
       return { dispose: vi.fn() };
+    }
+    onScroll(handler: () => void) {
+      this.scrollHandler = handler;
+      return { dispose: vi.fn() };
+    }
+    emitScroll() {
+      this.scrollHandler?.();
     }
     emitData(data: string) {
       this.dataHandler?.(data);
@@ -246,6 +259,78 @@ describe("terminal pane", () => {
     );
   });
 
+  it("writes the bounded output tail before reattaching a saved session", async () => {
+    state.invoke.mockImplementation((command: string, args: unknown) => {
+      if (command === "terminal_snapshot") {
+        return Promise.resolve({
+          data: [114, 101, 115, 116, 111, 114, 101, 100],
+        });
+      }
+      if (command === "terminal_attach") {
+        state.channel = (args as { channel: typeof state.channel }).channel;
+        return Promise.resolve();
+      }
+      return Promise.resolve();
+    });
+    host = document.createElement("div");
+    document.body.append(host);
+    root = createRoot(host);
+    await act(async () => {
+      root?.render(
+        <TerminalPane
+          sessionId="12345678-aaaa-bbbb-cccc-1234567890ab"
+          historyId="pane-1"
+          cwd="/tmp"
+          shell="/bin/sh"
+          scrollOffset={5}
+        />,
+      );
+    });
+    await vi.waitFor(() => {
+      expect(state.invoke).toHaveBeenCalledWith(
+        "terminal_attach",
+        expect.objectContaining({
+          stream_id: "12345678-aaaa-bbbb-cccc-1234567890ab",
+        }),
+      );
+    });
+    expect(state.invoke).not.toHaveBeenCalledWith(
+      "terminal_spawn",
+      expect.anything(),
+    );
+    expect(state.invoke).toHaveBeenCalledWith(
+      "terminal_snapshot",
+      expect.objectContaining({
+        request: { stream_id: "12345678-aaaa-bbbb-cccc-1234567890ab" },
+      }),
+    );
+    expect(state.terminal?.write).toHaveBeenCalledWith(
+      new Uint8Array([114, 101, 115, 116, 111, 114, 101, 100]),
+    );
+    expect(state.terminal?.scrollToLine).toHaveBeenCalledWith(5);
+  });
+
+  it("reports the scroll offset from the bottom for persistence", async () => {
+    const onViewport = vi.fn();
+    host = document.createElement("div");
+    document.body.append(host);
+    root = createRoot(host);
+    await act(async () => {
+      root?.render(<TerminalPane onViewport={onViewport} />);
+    });
+    await vi.waitFor(() => {
+      expect(state.invoke).toHaveBeenCalledWith(
+        "terminal_attach",
+        expect.anything(),
+      );
+    });
+    if (state.terminal) {
+      state.terminal.buffer.active = { baseY: 10, viewportY: 7 };
+    }
+    act(() => state.terminal?.emitScroll());
+    expect(onViewport).toHaveBeenCalledWith(3);
+  });
+
   it("keeps hidden output and focuses only when activated", async () => {
     await mount(false);
     expect(state.terminal?.focus).not.toHaveBeenCalled();
@@ -283,6 +368,86 @@ describe("terminal pane", () => {
     expect(state.search?.findNext).toHaveBeenCalledWith("needle");
   });
 
+  it("shows a lost session and starts a fresh shell with the same history id", async () => {
+    host = document.createElement("div");
+    document.body.append(host);
+    root = createRoot(host);
+    await act(async () => {
+      root?.render(
+        <TerminalPane
+          title="Terminal 1"
+          sessionId="12345678-aaaa-bbbb-cccc-1234567890ab"
+          sessionLost
+          historyId="pane-1"
+          cwd="/tmp"
+          shell="/bin/sh"
+        />,
+      );
+    });
+    expect(host.textContent).toContain("no longer running");
+    expect(state.invoke).not.toHaveBeenCalledWith(
+      "terminal_spawn",
+      expect.anything(),
+    );
+
+    const start = Array.from(
+      host.querySelectorAll<HTMLButtonElement>("button"),
+    ).find((button) => button.textContent?.trim() === "Start new shell");
+    expect(start).toBeDefined();
+    await act(async () => start?.click());
+    await vi.waitFor(() => {
+      expect(state.invoke).toHaveBeenCalledWith(
+        "terminal_spawn",
+        expect.objectContaining({
+          request: expect.objectContaining({ history_id: "pane-1" }),
+        }),
+      );
+    });
+  });
+
+  it("marks an attach failure as lost without spawning a replacement", async () => {
+    state.invoke.mockImplementation((command: string, args: unknown) => {
+      if (command === "terminal_spawn") {
+        return Promise.resolve({
+          stream_id: "12345678-aaaa-bbbb-cccc-1234567890ab",
+          shell: "/bin/sh",
+          cwd: "/tmp",
+          rows: 24,
+          cols: 80,
+        });
+      }
+      if (command === "terminal_attach") {
+        state.channel = (args as { channel: typeof state.channel }).channel;
+        return Promise.reject(new Error("session missing"));
+      }
+      return Promise.resolve();
+    });
+    const onLost = vi.fn();
+    host = document.createElement("div");
+    document.body.append(host);
+    root = createRoot(host);
+    await act(async () => {
+      root?.render(
+        <TerminalPane
+          title="Terminal 1"
+          sessionId="12345678-aaaa-bbbb-cccc-1234567890ab"
+          historyId="pane-1"
+          cwd="/tmp"
+          shell="/bin/sh"
+          onLost={onLost}
+        />,
+      );
+    });
+    await vi.waitFor(() => {
+      expect(onLost).toHaveBeenCalled();
+    });
+    expect(host.textContent).toContain("no longer running");
+    expect(state.invoke).not.toHaveBeenCalledWith(
+      "terminal_spawn",
+      expect.anything(),
+    );
+  });
+
   it("falls back when WebGL is unavailable", async () => {
     state.failWebgl = true;
     await mount();
@@ -299,7 +464,7 @@ describe("terminal pane", () => {
     expect(state.terminal?.open).toHaveBeenCalled();
   });
 
-  it("disposes the renderer and closes the host session on unmount", async () => {
+  it("disposes the renderer without killing the host session on UI detach", async () => {
     await mount();
     const terminal = state.terminal;
     await act(async () => {
@@ -307,11 +472,9 @@ describe("terminal pane", () => {
     });
     root = null;
     expect(terminal?.dispose).toHaveBeenCalled();
-    expect(state.invoke).toHaveBeenCalledWith(
+    expect(state.invoke).not.toHaveBeenCalledWith(
       "terminal_close",
-      expect.objectContaining({
-        request: { stream_id: "12345678-aaaa-bbbb-cccc-1234567890ab" },
-      }),
+      expect.anything(),
     );
   });
 });

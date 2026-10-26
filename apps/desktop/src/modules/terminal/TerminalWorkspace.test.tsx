@@ -4,12 +4,28 @@ import { act, createRef, type Ref } from "react";
 import { createRoot, type Root } from "react-dom/client";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
+const terminalApi = vi.hoisted(() => ({
+  getWorkspaceLayout: vi.fn(),
+  saveWorkspaceLayout: vi.fn(),
+  closeTerminal: vi.fn(),
+}));
+
+vi.mock("./terminal", () => ({
+  getWorkspaceLayout: terminalApi.getWorkspaceLayout,
+  saveWorkspaceLayout: terminalApi.saveWorkspaceLayout,
+  closeTerminal: terminalApi.closeTerminal,
+}));
+
 vi.mock("./TerminalPane", () => ({
   TerminalPane: ({
     title,
     active,
     zoomed,
     zoomHidden,
+    sessionId,
+    sessionLost,
+    historyId,
+    scrollOffset,
     onFocus,
     onClose,
   }: {
@@ -17,6 +33,10 @@ vi.mock("./TerminalPane", () => ({
     active: boolean;
     zoomed?: boolean;
     zoomHidden?: boolean;
+    sessionId?: string | null;
+    sessionLost?: boolean;
+    historyId?: string;
+    scrollOffset?: number;
     onFocus?: () => void;
     onClose?: () => void;
   }) => (
@@ -26,6 +46,10 @@ vi.mock("./TerminalPane", () => ({
       data-active={active ? "true" : "false"}
       data-zoomed={zoomed ? "true" : "false"}
       data-zoom-hidden={zoomHidden ? "true" : "false"}
+      data-session-id={sessionId ?? ""}
+      data-session-lost={sessionLost ? "true" : "false"}
+      data-history-id={historyId ?? ""}
+      data-scroll-offset={String(scrollOffset ?? 0)}
       onMouseDown={onFocus}
     >
       <span>{title}</span>
@@ -51,6 +75,15 @@ let container: HTMLDivElement;
 let root: Root;
 
 beforeEach(() => {
+  terminalApi.getWorkspaceLayout.mockResolvedValue({
+    layout: null,
+    host_instance_id: "host-1",
+    process_start: "start-1",
+    layout_host_instance_id: null,
+    layout_process_start: null,
+  });
+  terminalApi.saveWorkspaceLayout.mockResolvedValue(undefined);
+  terminalApi.closeTerminal.mockResolvedValue(undefined);
   container = document.createElement("div");
   document.body.append(container);
   root = createRoot(container);
@@ -71,6 +104,7 @@ async function render(
       <TerminalWorkspace ref={ref} shortcutsEnabled={shortcutsEnabled} />,
     );
   });
+  await vi.waitFor(() => expect(tabs().length).toBeGreaterThan(0));
 }
 
 function button(text: string): HTMLButtonElement {
@@ -142,6 +176,36 @@ function tabs(): HTMLButtonElement[] {
 }
 
 describe("terminal workspace", () => {
+  it("persists the loaded layout after the debounce window", async () => {
+    await render();
+    await vi.waitFor(
+      () => expect(terminalApi.saveWorkspaceLayout).toHaveBeenCalled(),
+      { timeout: 1500 },
+    );
+    const saved = terminalApi.saveWorkspaceLayout.mock.calls.at(-1)?.[0];
+    expect(saved?.version).toBe(1);
+    expect(saved?.tabs).toHaveLength(1);
+  });
+
+  it("persists a new tab through the debounced layout save", async () => {
+    await render();
+    terminalApi.saveWorkspaceLayout.mockClear();
+    await click(getButton('[aria-label="New tab"]'));
+    await vi.waitFor(
+      () =>
+        expect(terminalApi.saveWorkspaceLayout).toHaveBeenCalledWith(
+          expect.objectContaining({
+            tabs: expect.arrayContaining([
+              expect.objectContaining({ id: expect.any(String) }),
+            ]),
+          }),
+        ),
+      { timeout: 1500 },
+    );
+    const saved = terminalApi.saveWorkspaceLayout.mock.calls.at(-1)?.[0];
+    expect(saved?.tabs).toHaveLength(2);
+  });
+
   it("creates tabs without unmounting hidden panes", async () => {
     await render();
     expect(tabs()).toHaveLength(1);
@@ -390,6 +454,80 @@ describe("terminal workspace", () => {
     await click(button("Close other tabs"));
     expect(tabs()).toHaveLength(1);
     expect(panes()).toHaveLength(1);
+  });
+
+  it("restores a saved layout with its session and history identity", async () => {
+    terminalApi.getWorkspaceLayout.mockResolvedValue({
+      layout: {
+        version: 1,
+        active_tab_id: "tab-restored",
+        tabs: [
+          {
+            id: "tab-restored",
+            title: "restored",
+            active_pane_id: "pane-restored",
+            zoomed_pane_id: null,
+            root: {
+              kind: "leaf",
+              id: "pane-restored",
+              title: "restored",
+              session_id: "session-restored",
+              history_id: "pane-restored",
+              cwd: "/tmp",
+              shell: "/bin/sh",
+              scroll_offset: 5,
+              session_lost: false,
+            },
+          },
+        ],
+      },
+      host_instance_id: "host-1",
+      process_start: "start-1",
+      layout_host_instance_id: "host-1",
+      layout_process_start: "start-1",
+    });
+    await render();
+    expect(tabs()).toHaveLength(1);
+    expect(tabs()[0]?.textContent).toContain("restored");
+    expect(panes()[0]?.dataset.sessionId).toBe("session-restored");
+    expect(panes()[0]?.dataset.historyId).toBe("pane-restored");
+    expect(panes()[0]?.dataset.scrollOffset).toBe("5");
+    expect(panes()[0]?.dataset.sessionLost).toBe("false");
+  });
+
+  it("marks saved sessions lost after a host identity change", async () => {
+    terminalApi.getWorkspaceLayout.mockResolvedValue({
+      layout: {
+        version: 1,
+        active_tab_id: "tab-restored",
+        tabs: [
+          {
+            id: "tab-restored",
+            title: "restored",
+            active_pane_id: "pane-restored",
+            zoomed_pane_id: null,
+            root: {
+              kind: "leaf",
+              id: "pane-restored",
+              title: "restored",
+              session_id: "session-old",
+              history_id: "pane-restored",
+              cwd: "/tmp",
+              shell: "/bin/sh",
+              scroll_offset: 0,
+              session_lost: false,
+            },
+          },
+        ],
+      },
+      host_instance_id: "host-new",
+      process_start: "start-new",
+      layout_host_instance_id: "host-old",
+      layout_process_start: "start-old",
+    });
+    await render();
+    expect(panes()[0]?.dataset.sessionLost).toBe("true");
+    expect(panes()[0]?.dataset.sessionId).toBe("session-old");
   });
 
   it("keeps four panes available with one active pane", async () => {

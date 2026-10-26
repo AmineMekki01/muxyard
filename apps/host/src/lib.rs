@@ -2,6 +2,7 @@
 
 mod lock;
 mod runtime;
+mod store;
 
 use std::{
     env, io,

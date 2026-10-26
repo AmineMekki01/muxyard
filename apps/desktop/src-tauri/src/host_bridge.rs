@@ -14,8 +14,9 @@ use std::{
 
 use muxyard_contracts::{
     ApiError, ErrorCode, HostStatusEvent, HostStatusResponse, PROTOCOL_VERSION,
-    TerminalCloseRequest, TerminalInputRequest, TerminalResizeRequest, TerminalSpawnRequest,
-    TerminalSpawnResponse,
+    TerminalCloseRequest, TerminalInputRequest, TerminalResizeRequest, TerminalSnapshotRequest,
+    TerminalSnapshotResponse, TerminalSpawnRequest, TerminalSpawnResponse, WorkspaceLayout,
+    WorkspaceLayoutGetRequest, WorkspaceLayoutSaveRequest, WorkspaceLayoutSnapshot,
 };
 use muxyard_ipc::{IpcClient, IpcError, IpcResponse, TerminalStream};
 use muxyard_platform::PlatformPaths;
@@ -176,6 +177,27 @@ impl HostBridge {
     /// Close a host terminal session.
     pub(crate) fn terminal_close(&self, request: TerminalCloseRequest) -> Result<(), ApiError> {
         self.request("terminal.close", request)
+    }
+
+    /// Read recent output for renderer reattachment.
+    pub(crate) fn terminal_snapshot(
+        &self,
+        request: TerminalSnapshotRequest,
+    ) -> Result<TerminalSnapshotResponse, ApiError> {
+        self.request("terminal.snapshot", request)
+    }
+
+    /// Load the persisted workspace layout and host identity metadata.
+    pub(crate) fn workspace_layout_get(&self) -> Result<WorkspaceLayoutSnapshot, ApiError> {
+        self.request("workspace.layout.get", WorkspaceLayoutGetRequest {})
+    }
+
+    /// Persist the workspace layout for the current host.
+    pub(crate) fn workspace_layout_save(&self, layout: WorkspaceLayout) -> Result<(), ApiError> {
+        self.request(
+            "workspace.layout.save",
+            WorkspaceLayoutSaveRequest { layout },
+        )
     }
 
     /// Attach a binary output stream to a host terminal session.
@@ -653,6 +675,7 @@ mod tests {
                         .into_owned(),
                 ),
                 shell: Some("/bin/sh".to_string()),
+                history_id: None,
                 rows: 24,
                 cols: 80,
             })

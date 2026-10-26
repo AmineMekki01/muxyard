@@ -3,6 +3,7 @@
 #![cfg(unix)]
 
 use std::{
+    path::Path,
     sync::{Arc, mpsc},
     thread,
     time::{Duration, Instant},
@@ -10,11 +11,11 @@ use std::{
 
 use muxyard_contracts::{
     PROTOCOL_VERSION, TerminalCloseRequest, TerminalInputRequest, TerminalResizeRequest,
-    TerminalSpawnRequest, TerminalSpawnResponse,
+    TerminalSnapshotRequest, TerminalSnapshotResponse, TerminalSpawnRequest, TerminalSpawnResponse,
 };
 use muxyard_ipc::{
     HostStatusResponse, IpcClient, IpcOptions, IpcResponse, IpcServer, TERMINAL_CLOSE_METHOD,
-    TERMINAL_INPUT_METHOD, TERMINAL_RESIZE_METHOD, TERMINAL_SPAWN_METHOD,
+    TERMINAL_INPUT_METHOD, TERMINAL_RESIZE_METHOD, TERMINAL_SNAPSHOT_METHOD, TERMINAL_SPAWN_METHOD,
 };
 use muxyard_platform::PlatformPaths;
 use muxyard_terminal::{TerminalHub, TerminalLimits, TerminalService};
@@ -43,6 +44,7 @@ fn spawn_request(cwd: &std::path::Path) -> TerminalSpawnRequest {
     TerminalSpawnRequest {
         cwd: Some(cwd.to_string_lossy().into_owned()),
         shell: Some("/bin/sh".to_string()),
+        history_id: None,
         rows: 24,
         cols: 80,
     }
@@ -137,6 +139,259 @@ fn typed_spawn_input_resize_attach_and_close_work() {
 }
 
 #[test]
+fn snapshot_returns_recent_output_for_reattachment() {
+    let (temp, paths) = test_paths();
+    let hub = Arc::new(TerminalHub::new(TerminalLimits::default()).unwrap());
+    let service = Arc::new(TerminalService::new(hub));
+    let mut server =
+        IpcServer::start_with_terminal_service(&paths, sample_status(), Arc::clone(&service))
+            .unwrap();
+    let mut control = IpcClient::connect(&paths).unwrap();
+    let spawned: IpcResponse<TerminalSpawnResponse> = control
+        .request(
+            TERMINAL_SPAWN_METHOD,
+            TerminalSpawnRequest {
+                cwd: Some(temp.path().to_string_lossy().into_owned()),
+                shell: Some("/bin/sh".to_string()),
+                history_id: None,
+                rows: 24,
+                cols: 80,
+            },
+        )
+        .unwrap();
+    let spawned = match spawned {
+        IpcResponse::Ok { data } => data,
+        IpcResponse::Error { error } => panic!("spawn failed: {error}"),
+    };
+    let stream_id = Uuid::parse_str(&spawned.stream_id.0).unwrap();
+    let mut terminal = IpcClient::connect(&paths)
+        .unwrap()
+        .attach_terminal(stream_id, None)
+        .unwrap();
+    let input: IpcResponse<()> = control
+        .request(
+            TERMINAL_INPUT_METHOD,
+            TerminalInputRequest {
+                stream_id: spawned.stream_id.clone(),
+                data: "printf 'muxyard-snapshot-marker\\n'\\n".to_string(),
+            },
+        )
+        .unwrap();
+    assert!(matches!(input, IpcResponse::Ok { .. }));
+    let deadline = Instant::now() + Duration::from_secs(5);
+    let mut output = Vec::new();
+    while Instant::now() < deadline {
+        let frame = terminal.next_frame().unwrap();
+        output.extend_from_slice(frame.payload());
+        if String::from_utf8_lossy(&output).contains("muxyard-snapshot-marker") {
+            break;
+        }
+    }
+    assert!(String::from_utf8_lossy(&output).contains("muxyard-snapshot-marker"));
+    let snapshot: IpcResponse<TerminalSnapshotResponse> = control
+        .request(
+            TERMINAL_SNAPSHOT_METHOD,
+            TerminalSnapshotRequest {
+                stream_id: spawned.stream_id.clone(),
+            },
+        )
+        .unwrap();
+    match snapshot {
+        IpcResponse::Ok { data } => assert!(
+            String::from_utf8_lossy(&data.data).contains("muxyard-snapshot-marker"),
+            "snapshot did not contain recent output"
+        ),
+        IpcResponse::Error { error } => panic!("snapshot failed: {error}"),
+    }
+    let closed: IpcResponse<()> = control
+        .request(
+            TERMINAL_CLOSE_METHOD,
+            TerminalCloseRequest {
+                stream_id: spawned.stream_id,
+            },
+        )
+        .unwrap();
+    assert!(matches!(closed, IpcResponse::Ok { .. }));
+    drop(terminal);
+    drop(control);
+    server.stop();
+}
+
+#[test]
+fn history_ids_map_to_distinct_private_history_files() {
+    let (temp, paths) = test_paths();
+    let history_dir = temp.path().join("history");
+    let hub = Arc::new(TerminalHub::new(TerminalLimits::default()).unwrap());
+    let service = Arc::new(TerminalService::with_history(hub, history_dir.clone()));
+    let mut server =
+        IpcServer::start_with_terminal_service(&paths, sample_status(), Arc::clone(&service))
+            .unwrap();
+    let mut control = IpcClient::connect(&paths).unwrap();
+
+    let mut histories = Vec::new();
+    for history_id in ["pane-one", "pane-two"] {
+        let spawned: IpcResponse<TerminalSpawnResponse> = control
+            .request(
+                TERMINAL_SPAWN_METHOD,
+                TerminalSpawnRequest {
+                    cwd: Some(temp.path().to_string_lossy().into_owned()),
+                    shell: Some("/bin/sh".to_string()),
+                    history_id: Some(muxyard_contracts::Id(history_id.to_string())),
+                    rows: 24,
+                    cols: 80,
+                },
+            )
+            .unwrap();
+        let spawned = match spawned {
+            IpcResponse::Ok { data } => data,
+            IpcResponse::Error { error } => panic!("spawn failed: {error}"),
+        };
+        let stream_id = Uuid::parse_str(&spawned.stream_id.0).unwrap();
+        let mut terminal = IpcClient::connect(&paths)
+            .unwrap()
+            .attach_terminal(stream_id, None)
+            .unwrap();
+        let input: IpcResponse<()> = control
+            .request(
+                TERMINAL_INPUT_METHOD,
+                TerminalInputRequest {
+                    stream_id: spawned.stream_id.clone(),
+                    data: "printf '%s\n' \"$HISTFILE\"\n".to_string(),
+                },
+            )
+            .unwrap();
+        assert!(matches!(input, IpcResponse::Ok { .. }));
+        let deadline = Instant::now() + Duration::from_secs(5);
+        let mut output = Vec::new();
+        while Instant::now() < deadline {
+            let frame = terminal.next_frame().unwrap();
+            output.extend_from_slice(frame.payload());
+            let text = String::from_utf8_lossy(&output);
+            if text.contains(history_id) {
+                histories.push(text.into_owned());
+                break;
+            }
+        }
+        let closed: IpcResponse<()> = control
+            .request(
+                TERMINAL_CLOSE_METHOD,
+                TerminalCloseRequest {
+                    stream_id: spawned.stream_id,
+                },
+            )
+            .unwrap();
+        assert!(matches!(closed, IpcResponse::Ok { .. }));
+    }
+
+    assert_eq!(histories.len(), 2);
+    assert!(histories[0].contains("pane-one.history"));
+    assert!(histories[1].contains("pane-two.history"));
+    assert_ne!(histories[0], histories[1]);
+    assert!(history_dir.is_dir());
+    drop(control);
+    server.stop();
+}
+
+#[test]
+fn zsh_writes_commands_to_the_pane_history_file() {
+    if !Path::new("/bin/zsh").exists() {
+        return;
+    }
+    let (temp, paths) = test_paths();
+    let history_dir = temp.path().join("history");
+    let hub = Arc::new(TerminalHub::new(TerminalLimits::default()).unwrap());
+    let service = Arc::new(TerminalService::with_history(hub, history_dir.clone()));
+    let mut server =
+        IpcServer::start_with_terminal_service(&paths, sample_status(), Arc::clone(&service))
+            .unwrap();
+    let mut control = IpcClient::connect(&paths).unwrap();
+    let spawned: IpcResponse<TerminalSpawnResponse> = control
+        .request(
+            TERMINAL_SPAWN_METHOD,
+            TerminalSpawnRequest {
+                cwd: Some(temp.path().to_string_lossy().into_owned()),
+                shell: Some("/bin/zsh".to_string()),
+                history_id: Some(muxyard_contracts::Id("pane-zsh".to_string())),
+                rows: 24,
+                cols: 80,
+            },
+        )
+        .unwrap();
+    let spawned = match spawned {
+        IpcResponse::Ok { data } => data,
+        IpcResponse::Error { error } => panic!("spawn failed: {error}"),
+    };
+    let stream_id = Uuid::parse_str(&spawned.stream_id.0).unwrap();
+    let mut terminal = IpcClient::connect(&paths)
+        .unwrap()
+        .attach_terminal(stream_id, None)
+        .unwrap();
+    let deadline = Instant::now() + Duration::from_secs(5);
+    let mut startup = Vec::new();
+    while Instant::now() < deadline {
+        let frame = terminal.next_frame().unwrap();
+        startup.extend_from_slice(frame.payload());
+        if String::from_utf8_lossy(&startup).contains('%') {
+            break;
+        }
+    }
+    let input: IpcResponse<()> = control
+        .request(
+            TERMINAL_INPUT_METHOD,
+            TerminalInputRequest {
+                stream_id: spawned.stream_id.clone(),
+                data: "echo muxyard-history-marker\n".to_string(),
+            },
+        )
+        .unwrap();
+    assert!(matches!(input, IpcResponse::Ok { .. }));
+    let deadline = Instant::now() + Duration::from_secs(5);
+    let mut output = Vec::new();
+    while Instant::now() < deadline {
+        let frame = terminal.next_frame().unwrap();
+        output.extend_from_slice(frame.payload());
+        if String::from_utf8_lossy(&output).contains("muxyard-history-marker") {
+            break;
+        }
+    }
+    let input: IpcResponse<()> = control
+        .request(
+            TERMINAL_INPUT_METHOD,
+            TerminalInputRequest {
+                stream_id: spawned.stream_id.clone(),
+                data: "exit\n".to_string(),
+            },
+        )
+        .unwrap();
+    assert!(matches!(input, IpcResponse::Ok { .. }));
+    let path = history_dir.join("pane-zsh.history");
+    let deadline = Instant::now() + Duration::from_secs(5);
+    let mut content = String::new();
+    while Instant::now() < deadline {
+        if let Ok(next) = std::fs::read_to_string(&path) {
+            content = next;
+            if content.contains("muxyard-history-marker") {
+                break;
+            }
+        }
+        thread::sleep(Duration::from_millis(100));
+    }
+    assert!(
+        content.contains("muxyard-history-marker"),
+        "zsh history did not contain the command: {content:?}"
+    );
+    let _ = control.request::<_, IpcResponse<()>>(
+        TERMINAL_CLOSE_METHOD,
+        TerminalCloseRequest {
+            stream_id: spawned.stream_id,
+        },
+    );
+    drop(terminal);
+    drop(control);
+    server.stop();
+}
+
+#[test]
 fn unknown_terminal_control_session_returns_not_found() {
     let (_temp, paths) = test_paths();
     let hub = Arc::new(TerminalHub::new(TerminalLimits::default()).unwrap());
@@ -208,6 +463,7 @@ fn restart_after_close_and_missing_shell_are_bounded() {
             TerminalSpawnRequest {
                 cwd: Some(temp.path().to_string_lossy().into_owned()),
                 shell: Some("/muxyard-test/missing-shell".to_string()),
+                history_id: None,
                 rows: 24,
                 cols: 80,
             },
@@ -329,6 +585,7 @@ fn spawn_rejects_invalid_cwd_without_registering_a_session() {
             TerminalSpawnRequest {
                 cwd: Some("/muxyard-test/missing-cwd".to_string()),
                 shell: Some("/bin/sh".to_string()),
+                history_id: None,
                 rows: 24,
                 cols: 80,
             },

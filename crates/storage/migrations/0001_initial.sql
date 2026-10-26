@@ -77,3 +77,10 @@ CREATE TABLE agent_sessions (
 );
 
 CREATE INDEX idx_agents_task ON agent_sessions(task_id, updated_ms DESC);
+CREATE TABLE workspace_layouts (
+    id TEXT PRIMARY KEY,
+    structure_json TEXT NOT NULL,
+    host_instance_id TEXT,
+    process_start_token TEXT,
+    updated_ms INTEGER NOT NULL
+);

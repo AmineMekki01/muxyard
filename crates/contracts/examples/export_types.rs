@@ -3,8 +3,10 @@
 use muxyard_contracts::{
     AgentStatus, ApiError, ControlEnvelope, ControlMessageType, ErrorCode, ExecutionEnvironment,
     HostStatusEvent, HostStatusResponse, Id, MAX_CONTROL_BYTES, PROTOCOL_VERSION, ProtocolVersion,
-    TaskState, TerminalCloseRequest, TerminalInputRequest, TerminalResizeRequest,
-    TerminalSpawnRequest, TerminalSpawnResponse,
+    TaskState, TerminalCloseRequest, TerminalInputRequest, TerminalLayoutNode,
+    TerminalResizeRequest, TerminalSnapshotRequest, TerminalSnapshotResponse, TerminalSpawnRequest,
+    TerminalSpawnResponse, TerminalSplitDirection, TerminalTabLayout, WorkspaceLayout,
+    WorkspaceLayoutGetRequest, WorkspaceLayoutSaveRequest, WorkspaceLayoutSnapshot,
 };
 use ts_rs::{Config, TS};
 
@@ -25,9 +27,18 @@ fn main() {
         HostStatusEvent::decl(&config),
         TerminalSpawnRequest::decl(&config),
         TerminalSpawnResponse::decl(&config),
+        TerminalSnapshotRequest::decl(&config),
+        TerminalSnapshotResponse::decl(&config),
         TerminalInputRequest::decl(&config),
         TerminalResizeRequest::decl(&config),
         TerminalCloseRequest::decl(&config),
+        TerminalLayoutNode::decl(&config),
+        TerminalSplitDirection::decl(&config),
+        TerminalTabLayout::decl(&config),
+        WorkspaceLayout::decl(&config),
+        WorkspaceLayoutGetRequest::decl(&config),
+        WorkspaceLayoutSaveRequest::decl(&config),
+        WorkspaceLayoutSnapshot::decl(&config),
         ExecutionEnvironment::decl(&config),
         TaskState::decl(&config),
         AgentStatus::decl(&config),

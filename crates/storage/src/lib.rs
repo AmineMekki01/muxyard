@@ -3,6 +3,7 @@
 mod database;
 mod host;
 mod migrations;
+mod workspace;
 
 use std::{io, path::PathBuf};
 
@@ -12,6 +13,10 @@ pub use host::{
     reconcile_stale_host_instances, record_host_instance, update_host_instance_state,
 };
 pub use migrations::{MIGRATIONS, Migration, MigrationReport};
+pub use workspace::{
+    StoredWorkspaceLayout, TerminalSessionState, delete_workspace_layout, get_workspace_layout,
+    record_terminal_session, save_workspace_layout, update_terminal_session_state,
+};
 
 /// A storage initialization or query failure.
 #[derive(Debug, thiserror::Error)]

@@ -5,8 +5,9 @@ use std::fs;
 use muxyard_contracts::TaskState;
 use muxyard_storage::{
     Database, DatabaseOptions, HostInstance, HostState, MIGRATIONS, Migration, StorageError,
-    get_host_instance, mark_stale_terminal_sessions, reconcile_stale_host_instances,
-    record_host_instance, update_host_instance_state,
+    TerminalSessionState, get_host_instance, get_workspace_layout, mark_stale_terminal_sessions,
+    reconcile_stale_host_instances, record_host_instance, record_terminal_session,
+    save_workspace_layout, update_host_instance_state, update_terminal_session_state,
 };
 use rusqlite::{Connection, params};
 
@@ -561,4 +562,49 @@ fn unreadable_directory_is_reported() {
     let result = Database::open(directory.join("db.sqlite3"));
     fs::set_permissions(&directory, fs::Permissions::from_mode(0o700)).unwrap();
     assert!(matches!(result, Err(StorageError::Io { .. })));
+}
+
+#[test]
+fn workspace_layout_and_terminal_session_metadata_roundtrip() {
+    let (_root, mut database) = temp_database();
+    database.migrate().unwrap();
+    let connection = database.connection();
+    save_workspace_layout(
+        connection,
+        "default",
+        "{\"version\":1,\"tabs\":[],\"active_tab_id\":null}",
+        "host-1",
+        "start-1",
+        42,
+    )
+    .unwrap();
+    let layout = get_workspace_layout(connection, "default")
+        .unwrap()
+        .expect("layout");
+    assert_eq!(layout.host_instance_id.as_deref(), Some("host-1"));
+    assert_eq!(layout.process_start_token.as_deref(), Some("start-1"));
+    assert_eq!(layout.updated_ms, 42);
+
+    record_terminal_session(
+        connection,
+        "session-1",
+        "host-1",
+        "native-mac",
+        "/tmp",
+        "/bin/zsh",
+        50,
+    )
+    .unwrap();
+    assert!(
+        update_terminal_session_state(connection, "session-1", TerminalSessionState::Exited, 51)
+            .unwrap()
+    );
+    let state: String = connection
+        .query_row(
+            "SELECT state FROM terminal_sessions WHERE id = 'session-1'",
+            [],
+            |row| row.get(0),
+        )
+        .unwrap();
+    assert_eq!(state, "exited");
 }

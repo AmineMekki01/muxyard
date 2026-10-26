@@ -17,6 +17,7 @@ import {
   closeTerminal,
   inputTerminal,
   resizeTerminal,
+  snapshotTerminal,
   spawnTerminal,
 } from "./terminal";
 
@@ -25,9 +26,18 @@ type TerminalPaneProps = {
   active?: boolean;
   zoomed?: boolean;
   zoomHidden?: boolean;
+  sessionId?: string | null;
+  sessionLost?: boolean;
+  historyId?: string;
+  cwd?: string | null;
+  shell?: string | null;
+  scrollOffset?: number;
+  onViewport?: (offset: number) => void;
   onFocus?: () => void;
   onClose?: () => void;
   onToggleZoom?: () => void;
+  onSession?: (info: TerminalSpawnResponse) => void;
+  onLost?: () => void;
 };
 
 export function TerminalPane({
@@ -35,9 +45,18 @@ export function TerminalPane({
   active = true,
   zoomed = false,
   zoomHidden = false,
+  sessionId = null,
+  sessionLost = false,
+  historyId,
+  cwd,
+  shell,
+  scrollOffset = 0,
+  onViewport,
   onFocus,
   onClose,
   onToggleZoom,
+  onSession,
+  onLost,
 }: TerminalPaneProps = {}) {
   const containerRef = useRef<HTMLDivElement | null>(null);
   const fitAddonRef = useRef<FitAddon | null>(null);
@@ -46,13 +65,17 @@ export function TerminalPane({
   const activeRef = useRef(active);
   activeRef.current = active;
   const [attempt, setAttempt] = useState(0);
+  const [forceNew, setForceNew] = useState(false);
+  const [restoreFailed, setRestoreFailed] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [session, setSession] = useState<TerminalSpawnResponse | null>(null);
   const [searchOpen, setSearchOpen] = useState(false);
   const [searchText, setSearchText] = useState("");
   const searchInputRef = useRef<HTMLInputElement | null>(null);
+  const isLost = (sessionLost || restoreFailed) && !forceNew;
 
   useEffect(() => {
+    if (isLost) return;
     const container = containerRef.current;
     if (!container) return;
 
@@ -64,23 +87,35 @@ export function TerminalPane({
     let resizeScheduler: ReturnType<typeof createResizeScheduler> | null = null;
     let dataDisposable: { dispose: () => void } | null = null;
     let resizeDisposable: { dispose: () => void } | null = null;
+    let scrollDisposable: { dispose: () => void } | null = null;
 
     setError(null);
     setSession(null);
 
     const run = async () => {
-      const info = await spawnTerminal({
-        cwd: null,
-        shell: null,
-        rows: 24,
-        cols: 80,
-      });
+      const restoring = Boolean(sessionId) && !forceNew;
+      const info = restoring
+        ? {
+            stream_id: sessionId!,
+            shell: shell ?? "Shell",
+            cwd: cwd ?? "",
+            rows: 24,
+            cols: 80,
+          }
+        : await spawnTerminal({
+            cwd: cwd ?? null,
+            shell: shell ?? null,
+            history_id: historyId ?? null,
+            rows: 24,
+            cols: 80,
+          });
       if (!alive) {
-        await closeTerminal(info.stream_id).catch(() => {});
+        if (!restoring) await closeTerminal(info.stream_id).catch(() => {});
         return;
       }
       streamId = info.stream_id;
       setSession(info);
+      if (!restoring) onSession?.(info);
 
       terminal = new Terminal({
         allowProposedApi: true,
@@ -160,11 +195,38 @@ export function TerminalPane({
       });
       resizeObserver.observe(container);
 
+      if (restoring) {
+        const snapshot = await snapshotTerminal(info.stream_id).catch(
+          () => null,
+        );
+        if (alive && snapshot?.data?.length) {
+          terminal.write(new Uint8Array(snapshot.data));
+        }
+        if (alive && scrollOffset > 0) {
+          const buffer = terminal.buffer.active;
+          terminal.scrollToLine(Math.max(0, buffer.baseY - scrollOffset));
+        }
+      }
+
+      scrollDisposable = terminal.onScroll(() => {
+        const buffer = terminal?.buffer.active;
+        if (buffer) onViewport?.(Math.max(0, buffer.baseY - buffer.viewportY));
+      });
+
       const channel = new Channel<ArrayBuffer>();
       channel.onmessage = (chunk) => {
         if (alive) terminal?.write(new Uint8Array(chunk));
       };
-      await attachTerminal(info.stream_id, channel);
+      try {
+        await attachTerminal(info.stream_id, channel);
+      } catch (reason) {
+        if (restoring) {
+          setRestoreFailed(true);
+          onLost?.();
+          return;
+        }
+        throw reason;
+      }
       if (!alive) return;
 
       dataDisposable = terminal.onData((data) => {
@@ -201,16 +263,15 @@ export function TerminalPane({
       resizeObserver?.disconnect();
       dataDisposable?.dispose();
       resizeDisposable?.dispose();
+      scrollDisposable?.dispose();
       webgl?.dispose();
       fitAddonRef.current = null;
       searchAddonRef.current = null;
       terminalRef.current = null;
       terminal?.dispose();
-      if (streamId) {
-        void closeTerminal(streamId).catch(() => {});
-      }
+      // Detach only. Host sessions survive desktop UI exit for reattachment.
     };
-  }, [attempt]);
+  }, [attempt, forceNew, isLost]);
 
   useEffect(() => {
     if (!active || zoomHidden) return;
@@ -246,6 +307,67 @@ export function TerminalPane({
     }
   }, []);
 
+  const startFresh = () => {
+    if (sessionId) void closeTerminal(sessionId).catch(() => {});
+    setRestoreFailed(false);
+    setForceNew(true);
+    setAttempt((current) => current + 1);
+  };
+
+  if (isLost) {
+    return (
+      <section
+        className="terminal-panel terminal-panel-lost"
+        aria-label={title}
+        data-terminal-focus="true"
+        data-active={active ? "true" : "false"}
+        data-zoomed={zoomed ? "true" : "false"}
+        data-zoom-hidden={zoomHidden ? "true" : "false"}
+        aria-hidden={zoomHidden ? true : undefined}
+        onFocusCapture={() => onFocus?.()}
+        onMouseDown={() => onFocus?.()}
+      >
+        <header className="terminal-toolbar">
+          <div className="terminal-identity">
+            <strong>{title}</strong>
+            <span>{cwd ?? "Session unavailable"}</span>
+          </div>
+          <div className="terminal-actions">
+            {onToggleZoom ? (
+              <button
+                type="button"
+                className="terminal-icon-button"
+                aria-label={`Restore split layout for ${title}`}
+                title="Restore split layout"
+                aria-pressed={zoomed}
+                onClick={onToggleZoom}
+              >
+                <TerminalIcon name={zoomed ? "restore" : "maximize"} />
+              </button>
+            ) : null}
+            {onClose ? (
+              <button
+                type="button"
+                className="terminal-icon-button terminal-close-button"
+                aria-label={`Close pane ${title}`}
+                title={`Close pane ${title}`}
+                onClick={onClose}
+              >
+                <TerminalIcon name="close" />
+              </button>
+            ) : null}
+          </div>
+        </header>
+        <div className="terminal-lost" role="status">
+          <p>This terminal session is no longer running.</p>
+          <button type="button" className="primary-button" onClick={startFresh}>
+            Start new shell
+          </button>
+        </div>
+      </section>
+    );
+  }
+
   return (
     <section
       className="terminal-panel"
@@ -272,7 +394,7 @@ export function TerminalPane({
       <header className="terminal-toolbar">
         <div className="terminal-identity">
           <strong>{title}</strong>
-          <span>{session?.cwd ?? "Starting terminal"}</span>
+          <span>{session?.cwd ?? cwd ?? "Starting terminal"}</span>
         </div>
         <div className="terminal-actions">
           <button

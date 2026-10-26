@@ -5,7 +5,7 @@ use std::{
     path::PathBuf,
     process::{Command, Stdio},
     sync::{
-        Arc,
+        Arc, Mutex,
         atomic::{AtomicBool, Ordering},
     },
     thread,
@@ -15,14 +15,14 @@ use std::{
 use muxyard_contracts::PROTOCOL_VERSION;
 use muxyard_ipc::{HostStatusResponse, IpcServer};
 use muxyard_platform::{
-    ConfigStore, PlatformPaths, configure_detached, current_process_identity, open_private_append,
-    write_private_file,
+    ConfigStore, PlatformPaths, configure_detached, current_process_identity, ensure_private_dir,
+    open_private_append, write_private_file,
 };
 use muxyard_storage::{
     Database, DatabaseOptions, HostInstance, HostState, mark_stale_terminal_sessions,
     reconcile_stale_host_instances, record_host_instance, update_host_instance_state,
 };
-use muxyard_terminal::{TerminalHub, TerminalLimits, TerminalService};
+use muxyard_terminal::{TerminalHub, TerminalLimits, TerminalService, TerminalSessionStore};
 use uuid::Uuid;
 
 use crate::{
@@ -32,6 +32,7 @@ use crate::{
         ready_marker_matches, stop_requested, write_ready_marker, write_stop_request,
     },
     now_ms, os_user,
+    store::HostStore,
 };
 
 const START_TIMEOUT: Duration = Duration::from_secs(10);
@@ -76,7 +77,7 @@ pub enum HostStatus {
 /// A live host process holding the single-instance lock and database.
 pub struct HostRuntime {
     paths: PlatformPaths,
-    database: Database,
+    database: Arc<Mutex<Database>>,
     lock: HostLock,
     instance_id: String,
     stop: Arc<AtomicBool>,
@@ -118,6 +119,15 @@ impl HostRuntime {
         mark_stale_terminal_sessions(database.connection(), &instance_id, now)?;
         update_host_instance_state(database.connection(), &instance_id, HostState::Ready, now)?;
 
+        let history_dir = paths.data_dir.join("terminal-history");
+        ensure_private_dir(&history_dir)?;
+        let database = Arc::new(Mutex::new(database));
+        let store = Arc::new(HostStore::new(
+            Arc::clone(&database),
+            instance_id.clone(),
+            identity.start_identity.clone(),
+        ));
+
         let stop = Arc::new(AtomicBool::new(false));
         let stop_handler = Arc::clone(&stop);
         if let Err(error) = ctrlc::set_handler(move || stop_handler.store(true, Ordering::SeqCst)) {
@@ -126,10 +136,12 @@ impl HostRuntime {
             #[cfg(windows)]
             tracing::warn!(%error, "console signal handler unavailable; stop marker remains active");
         }
-        let terminal = Arc::new(TerminalService::new(Arc::new(TerminalHub::new(
-            TerminalLimits::default(),
-        )?)));
-        let ipc = IpcServer::start_with_terminal_service(
+        let terminal = Arc::new(TerminalService::with_store_and_history(
+            Arc::new(TerminalHub::new(TerminalLimits::default())?),
+            Arc::clone(&store) as Arc<dyn TerminalSessionStore>,
+            history_dir,
+        ));
+        let ipc = IpcServer::start_with_terminal_service_and_store(
             &paths,
             HostStatusResponse {
                 host_version: env!("CARGO_PKG_VERSION").to_string(),
@@ -141,6 +153,7 @@ impl HostRuntime {
                 ready: true,
             },
             Arc::clone(&terminal),
+            store,
         )?;
         write_ready_marker(&paths.host_ready_path(), lock.info())?;
 
@@ -188,7 +201,10 @@ impl HostRuntime {
             }
             if last_heartbeat.elapsed() >= HEARTBEAT {
                 if let Err(error) = update_host_instance_state(
-                    database.connection(),
+                    database
+                        .lock()
+                        .unwrap_or_else(|poisoned| poisoned.into_inner())
+                        .connection(),
                     &instance_id,
                     HostState::Ready,
                     now_ms(),
@@ -205,7 +221,10 @@ impl HostRuntime {
         terminal.close_all();
         let mut result = Ok(());
         if let Err(error) = update_host_instance_state(
-            database.connection(),
+            database
+                .lock()
+                .unwrap_or_else(|poisoned| poisoned.into_inner())
+                .connection(),
             &instance_id,
             HostState::Draining,
             now_ms(),
@@ -220,7 +239,10 @@ impl HostRuntime {
             tracing::warn!(%error, "could not clear ready marker");
         }
         if let Err(error) = update_host_instance_state(
-            database.connection(),
+            database
+                .lock()
+                .unwrap_or_else(|poisoned| poisoned.into_inner())
+                .connection(),
             &instance_id,
             HostState::Stopped,
             now_ms(),

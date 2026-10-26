@@ -9,10 +9,13 @@ use std::{
 };
 
 use muxyard_contracts::{
-    TerminalCloseRequest, TerminalInputRequest, TerminalSpawnRequest, TerminalSpawnResponse,
+    Id, TerminalCloseRequest, TerminalInputRequest, TerminalLayoutNode, TerminalSpawnRequest,
+    TerminalSpawnResponse, TerminalTabLayout, WorkspaceLayout, WorkspaceLayoutGetRequest,
+    WorkspaceLayoutSaveRequest, WorkspaceLayoutSnapshot,
 };
 use muxyard_ipc::{
     IpcClient, IpcResponse, TERMINAL_CLOSE_METHOD, TERMINAL_INPUT_METHOD, TERMINAL_SPAWN_METHOD,
+    WORKSPACE_LAYOUT_GET_METHOD, WORKSPACE_LAYOUT_SAVE_METHOD,
 };
 use muxyard_platform::PlatformPaths;
 use muxyard_storage::Database;
@@ -541,6 +544,7 @@ fn local_host_terminal_control_roundtrip() {
             TerminalSpawnRequest {
                 cwd: Some(host.root.to_string_lossy().into_owned()),
                 shell: Some("/bin/sh".to_string()),
+                history_id: None,
                 rows: 24,
                 cols: 80,
             },
@@ -596,6 +600,196 @@ fn local_host_terminal_control_roundtrip() {
     assert!(matches!(closed, IpcResponse::Ok { .. }));
     drop(terminal);
     drop(control);
+    assert!(host.stop().status.success());
+}
+
+#[cfg(unix)]
+#[test]
+fn host_layout_survives_restart_and_session_metadata_is_recorded() {
+    let host = HostGuard::new();
+    assert!(host.start().status.success());
+    let paths = PlatformPaths::from_root(&host.root);
+    let mut control = IpcClient::connect(&paths).unwrap();
+
+    let layout = WorkspaceLayout {
+        version: 1,
+        tabs: vec![TerminalTabLayout {
+            id: Id("tab-1".to_string()),
+            title: "Terminal 1".to_string(),
+            active_pane_id: Id("pane-1".to_string()),
+            zoomed_pane_id: None,
+            root: TerminalLayoutNode::Leaf {
+                id: Id("pane-1".to_string()),
+                title: "Terminal 1".to_string(),
+                session_id: None,
+                history_id: Id("pane-1".to_string()),
+                cwd: Some(host.root.to_string_lossy().into_owned()),
+                shell: Some("/bin/sh".to_string()),
+                scroll_offset: 0,
+                session_lost: false,
+            },
+        }],
+        active_tab_id: Some(Id("tab-1".to_string())),
+    };
+    let saved: IpcResponse<()> = control
+        .request(
+            WORKSPACE_LAYOUT_SAVE_METHOD,
+            WorkspaceLayoutSaveRequest {
+                layout: layout.clone(),
+            },
+        )
+        .unwrap();
+    assert!(matches!(saved, IpcResponse::Ok { .. }));
+    let first: IpcResponse<WorkspaceLayoutSnapshot> = control
+        .request(WORKSPACE_LAYOUT_GET_METHOD, WorkspaceLayoutGetRequest {})
+        .unwrap();
+    let first = match first {
+        IpcResponse::Ok { data } => data,
+        IpcResponse::Error { error } => panic!("layout get failed: {error}"),
+    };
+    assert_eq!(first.layout, Some(layout.clone()));
+    assert_eq!(
+        first.layout_host_instance_id.as_deref(),
+        Some(first.host_instance_id.as_str())
+    );
+
+    let spawned: IpcResponse<TerminalSpawnResponse> = control
+        .request(
+            TERMINAL_SPAWN_METHOD,
+            TerminalSpawnRequest {
+                cwd: Some(host.root.to_string_lossy().into_owned()),
+                shell: Some("/bin/sh".to_string()),
+                history_id: Some(Id("pane-test".to_string())),
+                rows: 24,
+                cols: 80,
+            },
+        )
+        .unwrap();
+    let spawned = match spawned {
+        IpcResponse::Ok { data } => data,
+        IpcResponse::Error { error } => panic!("terminal spawn failed: {error}"),
+    };
+    assert!(host.root.join("data/terminal-history").is_dir());
+    let spawned_id = spawned.stream_id.clone();
+    let closed: IpcResponse<()> = control
+        .request(
+            TERMINAL_CLOSE_METHOD,
+            TerminalCloseRequest {
+                stream_id: spawned.stream_id,
+            },
+        )
+        .unwrap();
+    assert!(matches!(closed, IpcResponse::Ok { .. }));
+    drop(control);
+    assert!(host.stop().status.success());
+
+    let database = Database::open(host.root.join("data/muxyard.sqlite3")).unwrap();
+    let state: String = database
+        .connection()
+        .query_row(
+            "SELECT state FROM terminal_sessions WHERE id = ?1",
+            [spawned_id.0.as_str()],
+            |row| row.get(0),
+        )
+        .unwrap();
+    assert_eq!(state, "exited");
+
+    assert!(host.start().status.success());
+    let mut control = IpcClient::connect(&paths).unwrap();
+    let second: IpcResponse<WorkspaceLayoutSnapshot> = control
+        .request(WORKSPACE_LAYOUT_GET_METHOD, WorkspaceLayoutGetRequest {})
+        .unwrap();
+    let second = match second {
+        IpcResponse::Ok { data } => data,
+        IpcResponse::Error { error } => panic!("layout get failed: {error}"),
+    };
+    assert_eq!(second.layout, Some(layout));
+    assert_ne!(
+        second.layout_host_instance_id.as_deref(),
+        Some(second.host_instance_id.as_str())
+    );
+    drop(control);
+    assert!(host.stop().status.success());
+}
+
+#[cfg(unix)]
+#[test]
+fn corrupt_workspace_layout_is_discarded_without_removing_session_records() {
+    let host = HostGuard::new();
+    assert!(host.start().status.success());
+    let paths = PlatformPaths::from_root(&host.root);
+    let mut control = IpcClient::connect(&paths).unwrap();
+    let spawned: IpcResponse<TerminalSpawnResponse> = control
+        .request(
+            TERMINAL_SPAWN_METHOD,
+            TerminalSpawnRequest {
+                cwd: Some(host.root.to_string_lossy().into_owned()),
+                shell: Some("/bin/sh".to_string()),
+                history_id: None,
+                rows: 24,
+                cols: 80,
+            },
+        )
+        .unwrap();
+    let spawned = match spawned {
+        IpcResponse::Ok { data } => data,
+        IpcResponse::Error { error } => panic!("terminal spawn failed: {error}"),
+    };
+    let layout = WorkspaceLayout {
+        version: 1,
+        tabs: vec![],
+        active_tab_id: None,
+    };
+    let saved: IpcResponse<()> = control
+        .request(
+            WORKSPACE_LAYOUT_SAVE_METHOD,
+            WorkspaceLayoutSaveRequest { layout },
+        )
+        .unwrap();
+    assert!(matches!(saved, IpcResponse::Ok { .. }));
+    drop(control);
+    assert!(host.stop().status.success());
+
+    let database = Database::open(host.root.join("data/muxyard.sqlite3")).unwrap();
+    database
+        .connection()
+        .execute(
+            "UPDATE workspace_layouts SET structure_json = 'not-json' WHERE id = 'default'",
+            [],
+        )
+        .unwrap();
+
+    assert!(host.start().status.success());
+    let mut control = IpcClient::connect(&paths).unwrap();
+    let snapshot: IpcResponse<WorkspaceLayoutSnapshot> = control
+        .request(WORKSPACE_LAYOUT_GET_METHOD, WorkspaceLayoutGetRequest {})
+        .unwrap();
+    let snapshot = match snapshot {
+        IpcResponse::Ok { data } => data,
+        IpcResponse::Error { error } => panic!("layout get failed: {error}"),
+    };
+    assert!(snapshot.layout.is_none());
+    drop(control);
+    drop(database);
+
+    let database = Database::open(host.root.join("data/muxyard.sqlite3")).unwrap();
+    let layouts: i64 = database
+        .connection()
+        .query_row("SELECT COUNT(*) FROM workspace_layouts", [], |row| {
+            row.get(0)
+        })
+        .unwrap();
+    assert_eq!(layouts, 0);
+    let state: String = database
+        .connection()
+        .query_row(
+            "SELECT state FROM terminal_sessions WHERE id = ?1",
+            [spawned.stream_id.0.as_str()],
+            |row| row.get(0),
+        )
+        .unwrap();
+    assert_eq!(state, "exited");
+    drop(database);
     assert!(host.stop().status.success());
 }
 

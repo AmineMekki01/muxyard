@@ -129,6 +129,10 @@ export type TerminalSpawnRequest = {
    */
   shell: string | null;
   /**
+   * Stable per-pane history identity; the host maps it to a private HISTFILE.
+   */
+  history_id: Id | null;
+  /**
    * Initial rows.
    */
   rows: number;
@@ -159,6 +163,20 @@ export type TerminalSpawnResponse = {
    * Initial columns.
    */
   cols: number;
+};
+
+export type TerminalSnapshotRequest = {
+  /**
+   * Target stream/session.
+   */
+  stream_id: Id;
+};
+
+export type TerminalSnapshotResponse = {
+  /**
+   * Recent raw PTY bytes, oldest first.
+   */
+  data: Array<number>;
 };
 
 export type TerminalInputRequest = {
@@ -192,6 +210,138 @@ export type TerminalCloseRequest = {
    * Target stream/session.
    */
   stream_id: Id;
+};
+
+export type TerminalLayoutNode =
+  | {
+      kind: "leaf";
+      /**
+       * Stable pane identifier.
+       */
+      id: Id;
+      /**
+       * Display title fallback.
+       */
+      title: string;
+      /**
+       * Host stream/session identifier when one was created.
+       */
+      session_id: Id | null;
+      /**
+       * Stable history identity used for the private shell history file.
+       */
+      history_id: Id;
+      /**
+       * Last resolved working directory.
+       */
+      cwd: string | null;
+      /**
+       * Last resolved shell executable.
+       */
+      shell: string | null;
+      /**
+       * Lines scrolled up from the bottom when the layout was saved.
+       */
+      scroll_offset: number;
+      /**
+       * Whether the saved session is known to be lost.
+       */
+      session_lost: boolean;
+    }
+  | {
+      kind: "split";
+      /**
+       * Stable split identifier.
+       */
+      id: Id;
+      /**
+       * Split orientation.
+       */
+      direction: TerminalSplitDirection;
+      /**
+       * First-child ratio in the range 0.15–0.85.
+       */
+      ratio: number;
+      /**
+       * First subtree.
+       */
+      first: TerminalLayoutNode;
+      /**
+       * Second subtree.
+       */
+      second: TerminalLayoutNode;
+    };
+
+export type TerminalSplitDirection = "horizontal" | "vertical";
+
+export type TerminalTabLayout = {
+  /**
+   * Stable tab identifier.
+   */
+  id: Id;
+  /**
+   * User-visible tab title.
+   */
+  title: string;
+  /**
+   * Pane tree.
+   */
+  root: TerminalLayoutNode;
+  /**
+   * Active pane inside this tab.
+   */
+  active_pane_id: Id;
+  /**
+   * Maximized pane, when present.
+   */
+  zoomed_pane_id: Id | null;
+};
+
+export type WorkspaceLayout = {
+  /**
+   * Layout schema version.
+   */
+  version: number;
+  /**
+   * Tabs in display order.
+   */
+  tabs: Array<TerminalTabLayout>;
+  /**
+   * Active tab, when any.
+   */
+  active_tab_id: Id | null;
+};
+
+export type WorkspaceLayoutGetRequest = Record<symbol, never>;
+
+export type WorkspaceLayoutSaveRequest = {
+  /**
+   * Layout to persist.
+   */
+  layout: WorkspaceLayout;
+};
+
+export type WorkspaceLayoutSnapshot = {
+  /**
+   * Saved layout, or none when absent/corrupt.
+   */
+  layout: WorkspaceLayout | null;
+  /**
+   * Current host instance identifier.
+   */
+  host_instance_id: string;
+  /**
+   * Current host process start identity.
+   */
+  process_start: string;
+  /**
+   * Host instance that saved the layout, when present.
+   */
+  layout_host_instance_id: string | null;
+  /**
+   * Process start identity that saved the layout, when present.
+   */
+  layout_process_start: string | null;
 };
 
 export type ExecutionEnvironment =

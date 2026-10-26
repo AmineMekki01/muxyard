@@ -26,8 +26,9 @@ use interprocess::local_socket::GenericNamespaced;
 use interprocess::local_socket::{ListenerNonblockingMode, ListenerOptions, prelude::*};
 use muxyard_contracts::{
     ApiError, ControlEnvelope, ControlMessageType, ErrorCode, Id, ProtocolVersion,
-    TerminalCloseRequest, TerminalInputRequest, TerminalResizeRequest, TerminalSpawnRequest,
-    decode_control,
+    TerminalCloseRequest, TerminalInputRequest, TerminalResizeRequest, TerminalSnapshotRequest,
+    TerminalSnapshotResponse, TerminalSpawnRequest, WorkspaceLayoutGetRequest,
+    WorkspaceLayoutSaveRequest, decode_control,
 };
 use muxyard_platform::PlatformPaths;
 use muxyard_terminal::{
@@ -41,7 +42,8 @@ use tracing::warn;
 use crate::{
     HOST_STATUS_METHOD, HostStatusRequest, HostStatusResponse, IpcError, IpcResponse,
     TERMINAL_ATTACH_METHOD, TERMINAL_CLOSE_METHOD, TERMINAL_INPUT_METHOD, TERMINAL_RESIZE_METHOD,
-    TERMINAL_SPAWN_METHOD, read_frame_until, write_frame_until,
+    TERMINAL_SNAPSHOT_METHOD, TERMINAL_SPAWN_METHOD, WORKSPACE_LAYOUT_GET_METHOD,
+    WORKSPACE_LAYOUT_SAVE_METHOD, WorkspaceLayoutStore, read_frame_until, write_frame_until,
 };
 
 /// Bounds applied to one local client connection.
@@ -75,7 +77,7 @@ impl IpcServer {
     /// made owner-only after binding. On Windows the named pipe receives a
     /// security descriptor for the current user's SID.
     pub fn start(paths: &PlatformPaths, status: HostStatusResponse) -> Result<Self, IpcError> {
-        Self::start_inner(paths, status, None, IpcOptions::default())
+        Self::start_inner(paths, status, None, None, IpcOptions::default())
     }
 
     /// Bind the endpoint with explicit timeout settings.
@@ -84,7 +86,7 @@ impl IpcServer {
         status: HostStatusResponse,
         options: IpcOptions,
     ) -> Result<Self, IpcError> {
-        Self::start_inner(paths, status, None, options)
+        Self::start_inner(paths, status, None, None, options)
     }
 
     /// Bind the endpoint and enable terminal stream attachments.
@@ -97,6 +99,7 @@ impl IpcServer {
             paths,
             status,
             Some(Arc::new(TerminalService::new(terminal))),
+            None,
             IpcOptions::default(),
         )
     }
@@ -112,6 +115,7 @@ impl IpcServer {
             paths,
             status,
             Some(Arc::new(TerminalService::new(terminal))),
+            None,
             options,
         )
     }
@@ -122,7 +126,7 @@ impl IpcServer {
         status: HostStatusResponse,
         terminal: Arc<TerminalService>,
     ) -> Result<Self, IpcError> {
-        Self::start_inner(paths, status, Some(terminal), IpcOptions::default())
+        Self::start_inner(paths, status, Some(terminal), None, IpcOptions::default())
     }
 
     /// Bind the endpoint with a managed terminal service and explicit timeouts.
@@ -132,13 +136,30 @@ impl IpcServer {
         terminal: Arc<TerminalService>,
         options: IpcOptions,
     ) -> Result<Self, IpcError> {
-        Self::start_inner(paths, status, Some(terminal), options)
+        Self::start_inner(paths, status, Some(terminal), None, options)
+    }
+
+    /// Bind the endpoint with terminal and workspace persistence stores.
+    pub fn start_with_terminal_service_and_store(
+        paths: &PlatformPaths,
+        status: HostStatusResponse,
+        terminal: Arc<TerminalService>,
+        layout_store: Arc<dyn WorkspaceLayoutStore>,
+    ) -> Result<Self, IpcError> {
+        Self::start_inner(
+            paths,
+            status,
+            Some(terminal),
+            Some(layout_store),
+            IpcOptions::default(),
+        )
     }
 
     fn start_inner(
         paths: &PlatformPaths,
         status: HostStatusResponse,
         terminal: Option<Arc<TerminalService>>,
+        layout_store: Option<Arc<dyn WorkspaceLayoutStore>>,
         options: IpcOptions,
     ) -> Result<Self, IpcError> {
         let listener = create_listener(paths)?;
@@ -151,6 +172,7 @@ impl IpcServer {
         let accept_connections = Arc::clone(&connections);
         let accept_status = Arc::new(status);
         let accept_terminal = terminal;
+        let accept_layout = layout_store;
         let accept_thread = thread::Builder::new()
             .name("muxyard-ipc-accept".to_string())
             .spawn(move || {
@@ -160,6 +182,7 @@ impl IpcServer {
                     accept_connections,
                     accept_status,
                     accept_terminal,
+                    accept_layout,
                     options,
                 );
             })
@@ -210,6 +233,7 @@ fn accept_loop(
     connections: Arc<Mutex<Vec<JoinHandle<()>>>>,
     status: Arc<HostStatusResponse>,
     terminal: Option<Arc<TerminalService>>,
+    layout_store: Option<Arc<dyn WorkspaceLayoutStore>>,
     options: IpcOptions,
 ) {
     while !stop.load(Ordering::SeqCst) {
@@ -218,6 +242,7 @@ fn accept_loop(
                 let connection_stop = Arc::clone(&stop);
                 let connection_status = Arc::clone(&status);
                 let connection_terminal = terminal.clone();
+                let connection_layout = layout_store.clone();
                 match thread::Builder::new()
                     .name("muxyard-ipc-connection".to_string())
                     .spawn(move || {
@@ -225,6 +250,7 @@ fn accept_loop(
                             stream,
                             connection_status.as_ref(),
                             connection_terminal.as_deref(),
+                            connection_layout.as_deref(),
                             connection_stop.as_ref(),
                             options,
                         ) {
@@ -255,6 +281,7 @@ fn handle_connection(
     mut stream: LocalSocketStream,
     status: &HostStatusResponse,
     terminal: Option<&TerminalService>,
+    layout_store: Option<&dyn WorkspaceLayoutStore>,
     stop: &AtomicBool,
     options: IpcOptions,
 ) -> Result<(), IpcError> {
@@ -276,6 +303,7 @@ fn handle_connection(
             &frame,
             status,
             terminal,
+            layout_store,
             options.request_timeout,
         )? {
             FrameAction::Continue => {}
@@ -298,6 +326,7 @@ fn handle_frame(
     frame: &[u8],
     status: &HostStatusResponse,
     terminal: Option<&TerminalService>,
+    layout_store: Option<&dyn WorkspaceLayoutStore>,
     timeout: Duration,
 ) -> Result<FrameAction, IpcError> {
     let request = match decode_control::<Value>(frame) {
@@ -353,6 +382,99 @@ fn handle_frame(
                 timeout,
             )?;
         }
+        WORKSPACE_LAYOUT_GET_METHOD => {
+            let Some(layout_store) = layout_store else {
+                write_error(
+                    stream,
+                    request.id,
+                    request.method,
+                    ApiError {
+                        code: ErrorCode::UnsupportedCapability,
+                        message: "Workspace layout persistence is not available on this host."
+                            .to_string(),
+                    },
+                    timeout,
+                )?;
+                return Ok(FrameAction::Continue);
+            };
+            if serde_json::from_value::<WorkspaceLayoutGetRequest>(request.data).is_err() {
+                write_error(
+                    stream,
+                    request.id,
+                    request.method,
+                    invalid_request("The workspace.layout.get request body is invalid."),
+                    timeout,
+                )?;
+                return Ok(FrameAction::Continue);
+            }
+            match layout_store.load_layout() {
+                Ok(snapshot) => write_response(
+                    stream,
+                    request.id,
+                    request.method,
+                    IpcResponse::ok(snapshot),
+                    timeout,
+                )?,
+                Err(_) => write_error(
+                    stream,
+                    request.id,
+                    request.method,
+                    ApiError {
+                        code: ErrorCode::Internal,
+                        message: "The workspace layout could not be loaded.".to_string(),
+                    },
+                    timeout,
+                )?,
+            }
+        }
+        WORKSPACE_LAYOUT_SAVE_METHOD => {
+            let Some(layout_store) = layout_store else {
+                write_error(
+                    stream,
+                    request.id,
+                    request.method,
+                    ApiError {
+                        code: ErrorCode::UnsupportedCapability,
+                        message: "Workspace layout persistence is not available on this host."
+                            .to_string(),
+                    },
+                    timeout,
+                )?;
+                return Ok(FrameAction::Continue);
+            };
+            let save: WorkspaceLayoutSaveRequest = match serde_json::from_value(request.data) {
+                Ok(save) => save,
+                Err(_) => {
+                    write_error(
+                        stream,
+                        request.id,
+                        request.method,
+                        invalid_request("The workspace.layout.save request body is invalid."),
+                        timeout,
+                    )?;
+                    return Ok(FrameAction::Continue);
+                }
+            };
+            match layout_store.save_layout(&save.layout) {
+                Ok(()) => write_response(
+                    stream,
+                    request.id,
+                    request.method,
+                    IpcResponse::ok(()),
+                    timeout,
+                )?,
+                Err(_) => write_error(
+                    stream,
+                    request.id,
+                    request.method,
+                    ApiError {
+                        code: ErrorCode::InvalidRequest,
+                        message: "The workspace layout could not be saved.".to_string(),
+                    },
+                    timeout,
+                )?,
+            }
+        }
         TERMINAL_ATTACH_METHOD => {
             let Some(terminal) = terminal else {
                 write_error(
@@ -407,6 +529,50 @@ fn handle_frame(
                 timeout,
             )?;
             return Ok(FrameAction::Terminal(subscription));
+        }
+        TERMINAL_SNAPSHOT_METHOD => {
+            let Some(terminal) = terminal else {
+                write_error(
+                    stream,
+                    request.id,
+                    request.method,
+                    ApiError {
+                        code: ErrorCode::UnsupportedCapability,
+                        message: "Terminal sessions are not available on this host.".to_string(),
+                    },
+                    timeout,
+                )?;
+                return Ok(FrameAction::Continue);
+            };
+            let snapshot: TerminalSnapshotRequest = match serde_json::from_value(request.data) {
+                Ok(snapshot) => snapshot,
+                Err(_) => {
+                    write_error(
+                        stream,
+                        request.id,
+                        request.method,
+                        invalid_request("The terminal.snapshot request body is invalid."),
+                        timeout,
+                    )?;
+                    return Ok(FrameAction::Continue);
+                }
+            };
+            match terminal.snapshot(&snapshot) {
+                Ok(data) => write_response(
+                    stream,
+                    request.id,
+                    request.method,
+                    IpcResponse::ok(TerminalSnapshotResponse { data }),
+                    timeout,
+                )?,
+                Err(error) => write_error(
+                    stream,
+                    request.id,
+                    request.method,
+                    terminal_service_error(error),
+                    timeout,
+                )?,
+            }
         }
         TERMINAL_SPAWN_METHOD => {
             let Some(terminal) = terminal else {
@@ -609,6 +775,14 @@ fn terminal_service_error(error: TerminalServiceError) -> ApiError {
         TerminalServiceError::InvalidStreamId(_) => ApiError {
             code: ErrorCode::InvalidRequest,
             message: "The requested terminal stream identifier is invalid.".to_string(),
+        },
+        TerminalServiceError::InvalidHistoryId(_) => ApiError {
+            code: ErrorCode::InvalidRequest,
+            message: "The requested terminal history identifier is invalid.".to_string(),
+        },
+        TerminalServiceError::Store(_) => ApiError {
+            code: ErrorCode::Internal,
+            message: "The terminal session metadata could not be persisted.".to_string(),
         },
         TerminalServiceError::Hub(TerminalHubError::TooManySessions(_)) => ApiError {
             code: ErrorCode::RateLimited,

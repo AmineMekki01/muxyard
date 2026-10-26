@@ -558,6 +558,20 @@ kbd {
   height: 100%;
 }
 
+.terminal-lost {
+  display: flex;
+  flex: 1;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: var(--space-3);
+  padding: var(--space-5);
+  color: #9fb6bc;
+  background: #0f1a1f;
+  font-size: 13px;
+  text-align: center;
+}
+
 .terminal-error {
   display: flex;
   align-items: center;

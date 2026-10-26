@@ -6,6 +6,12 @@ export type TerminalLeaf = {
   kind: "leaf";
   id: string;
   title: string;
+  sessionId: string | null;
+  historyId: string;
+  cwd: string | null;
+  shell: string | null;
+  scrollOffset: number;
+  sessionLost: boolean;
 };
 
 export type TerminalSplit = {
@@ -35,7 +41,18 @@ export function createId(prefix: string): string {
 }
 
 export function createLeaf(title: string): TerminalLeaf {
-  return { kind: "leaf", id: createId("pane"), title };
+  const id = createId("pane");
+  return {
+    kind: "leaf",
+    id,
+    title,
+    sessionId: null,
+    historyId: id,
+    cwd: null,
+    shell: null,
+    scrollOffset: 0,
+    sessionLost: false,
+  };
 }
 
 export function createTab(number: number): TerminalTab {
@@ -148,4 +165,19 @@ export function nextPaneId(
 
 export function paneCount(node: LayoutNode): number {
   return listLeaves(node).length;
+}
+
+export function updateLeaf(
+  node: LayoutNode,
+  paneId: string,
+  update: (leaf: TerminalLeaf) => TerminalLeaf,
+): LayoutNode {
+  if (node.kind === "leaf") {
+    return node.id === paneId ? update(node) : node;
+  }
+  const first = updateLeaf(node.first, paneId, update);
+  if (first !== node.first) return { ...node, first };
+  const second = updateLeaf(node.second, paneId, update);
+  if (second !== node.second) return { ...node, second };
+  return node;
 }

@@ -13,6 +13,8 @@ pub struct TerminalSpawnRequest {
     pub cwd: Option<String>,
     /// Optional explicit shell executable.
     pub shell: Option<String>,
+    /// Stable per-pane history identity; the host maps it to a private HISTFILE.
+    pub history_id: Option<Id>,
     /// Initial rows.
     pub rows: u16,
     /// Initial columns.
@@ -67,4 +69,22 @@ pub struct TerminalResizeRequest {
 pub struct TerminalCloseRequest {
     /// Target stream/session.
     pub stream_id: Id,
+}
+
+/// Request the bounded recent output tail for a live terminal session.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+#[cfg_attr(feature = "typescript", derive(ts_rs::TS))]
+pub struct TerminalSnapshotRequest {
+    /// Target stream/session.
+    pub stream_id: Id,
+}
+
+/// Bounded recent terminal output used for renderer reattachment.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+#[cfg_attr(feature = "typescript", derive(ts_rs::TS))]
+pub struct TerminalSnapshotResponse {
+    /// Recent raw PTY bytes, oldest first.
+    pub data: Vec<u8>,
 }
