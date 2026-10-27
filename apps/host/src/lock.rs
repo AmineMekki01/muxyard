@@ -101,6 +101,13 @@ pub struct HostLock {
 impl HostLock {
     /// Inspect the lock without modifying it.
     pub fn inspect(path: &Path) -> Result<LockState, LockError> {
+        Self::inspect_with_read(path, |path| fs::read(path))
+    }
+
+    fn inspect_with_read(
+        path: &Path,
+        read: impl FnOnce(&Path) -> io::Result<Vec<u8>>,
+    ) -> Result<LockState, LockError> {
         let metadata = match fs::symlink_metadata(path) {
             Ok(metadata) => metadata,
             Err(error) if error.kind() == io::ErrorKind::NotFound => {
@@ -116,10 +123,19 @@ impl HostLock {
         if metadata.file_type().is_symlink() || !metadata.is_file() {
             return Ok(LockState::Corrupt(path.to_path_buf()));
         }
-        let bytes = fs::read(path).map_err(|error| LockError::Io {
-            path: path.to_path_buf(),
-            source: error,
-        })?;
+        let bytes = match read(path) {
+            Ok(bytes) => bytes,
+            // Graceful shutdown can remove the lock after the metadata check.
+            Err(error) if error.kind() == io::ErrorKind::NotFound => {
+                return Ok(LockState::Missing);
+            }
+            Err(error) => {
+                return Err(LockError::Io {
+                    path: path.to_path_buf(),
+                    source: error,
+                });
+            }
+        };
         let info: HostLockInfo = match serde_json::from_slice(&bytes) {
             Ok(info) => info,
             Err(_) => return Ok(LockState::Corrupt(path.to_path_buf())),
@@ -351,6 +367,37 @@ mod tests {
         ));
         drop(lock);
         assert_eq!(HostLock::inspect(&path).unwrap(), LockState::Missing);
+    }
+
+    #[test]
+    fn lock_removed_during_inspection_is_missing() {
+        let root = tempfile::tempdir().unwrap();
+        let path = root.path().join("host.lock");
+        fs::write(&path, serde_json::to_vec(&info("stopping")).unwrap()).unwrap();
+
+        let state = HostLock::inspect_with_read(&path, |path| {
+            fs::remove_file(path).unwrap();
+            fs::read(path)
+        })
+        .expect("normal shutdown can remove the lock after metadata inspection");
+
+        assert_eq!(state, LockState::Missing);
+        assert!(!path.exists());
+    }
+
+    #[test]
+    fn unreadable_lock_during_inspection_still_fails_closed() {
+        let root = tempfile::tempdir().unwrap();
+        let path = root.path().join("host.lock");
+        let original = serde_json::to_vec(&info("running")).unwrap();
+        fs::write(&path, &original).unwrap();
+
+        let error =
+            HostLock::inspect_with_read(&path, |_| Err(io::ErrorKind::PermissionDenied.into()))
+                .unwrap_err();
+        assert!(matches!(error, LockError::Io { source, .. }
+            if source.kind() == io::ErrorKind::PermissionDenied));
+        assert_eq!(fs::read(&path).unwrap(), original);
     }
 
     #[test]

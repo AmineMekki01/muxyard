@@ -90,11 +90,21 @@ impl HostGuard {
     }
 
     fn output(&self, args: &[&str]) -> Output {
-        command_output(self.command().args(args), Duration::from_secs(20)).unwrap_or_else(|error| {
-            let startup =
-                fs::read_to_string(self.root.join("runtime/host-startup.log")).unwrap_or_default();
-            panic!("{error}\nhost startup diagnostics: {startup}");
-        })
+        let output = command_output(self.command().args(args), Duration::from_secs(20))
+            .unwrap_or_else(|error| {
+                let startup = fs::read_to_string(self.root.join("runtime/host-startup.log"))
+                    .unwrap_or_default();
+                panic!("{error}\nhost startup diagnostics: {startup}");
+            });
+        if !output.status.success() {
+            eprintln!(
+                "host {args:?} exited with {}\nstdout: {}\nstderr: {}",
+                output.status,
+                String::from_utf8_lossy(&output.stdout),
+                String::from_utf8_lossy(&output.stderr),
+            );
+        }
+        output
     }
 
     fn status_json(&self) -> (i32, Value) {
