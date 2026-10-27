@@ -27,13 +27,21 @@ pub fn process_identity(pid: u32) -> Result<Option<ProcessIdentity>, PlatformErr
     #[cfg(unix)]
     {
         let output = Command::new("ps")
-            .args(["-p", &pid.to_string(), "-o", "lstart="])
+            .args(["-p", &pid.to_string(), "-o", "lstart=", "-o", "stat="])
             .output()
             .map_err(|error| PlatformError::Process(format!("ps could not run: {error}")))?;
         if !output.status.success() {
             return Ok(None);
         }
-        let start_identity = String::from_utf8_lossy(&output.stdout).trim().to_string();
+        let line = String::from_utf8_lossy(&output.stdout).trim().to_string();
+        let Some((start_identity, state)) = line.rsplit_once(char::is_whitespace) else {
+            return Ok(None);
+        };
+        // A zombie still appears in `ps`, but it cannot own a live host.
+        if state.starts_with('Z') {
+            return Ok(None);
+        }
+        let start_identity = start_identity.trim().to_string();
         if start_identity.is_empty() {
             return Ok(None);
         }
@@ -44,25 +52,26 @@ pub fn process_identity(pid: u32) -> Result<Option<ProcessIdentity>, PlatformErr
     }
     #[cfg(windows)]
     {
-        let script = format!(
-            "$p = Get-CimInstance Win32_Process -Filter 'ProcessId = {pid}'; if ($p) {{ $p.CreationDate.ToString('o') }}"
+        use sysinfo::{Pid, ProcessRefreshKind, ProcessesToUpdate, System};
+
+        let process_id = Pid::from_u32(pid);
+        let mut system = System::new();
+        system.refresh_processes_specifics(
+            ProcessesToUpdate::Some(&[process_id]),
+            true,
+            ProcessRefreshKind::nothing(),
         );
-        let output = Command::new("powershell")
-            .args(["-NoProfile", "-NonInteractive", "-Command", &script])
-            .output()
-            .map_err(|error| {
-                PlatformError::Process(format!("PowerShell could not run: {error}"))
-            })?;
-        if !output.status.success() {
+        let Some(process) = system.process(process_id) else {
             return Ok(None);
-        }
-        let start_identity = String::from_utf8_lossy(&output.stdout).trim().to_string();
-        if start_identity.is_empty() {
-            return Ok(None);
+        };
+        if process.start_time() == 0 {
+            return Err(PlatformError::Process(
+                "process start identity is unavailable".to_string(),
+            ));
         }
         Ok(Some(ProcessIdentity {
             pid,
-            start_identity,
+            start_identity: format!("windows:{}", process.start_time()),
         }))
     }
     #[cfg(not(any(unix, windows)))]
@@ -106,5 +115,34 @@ mod tests {
     #[test]
     fn dead_pid_has_no_identity() {
         assert_eq!(process_identity(u32::MAX).unwrap(), None);
+    }
+
+    #[test]
+    fn repeated_process_identity_is_stable() {
+        let first = current_process_identity().unwrap();
+        for _ in 0..10 {
+            assert_eq!(process_identity(first.pid).unwrap(), Some(first.clone()));
+        }
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn exited_process_has_no_identity() {
+        let mut child = Command::new("cmd")
+            .args(["/D", "/C", "exit", "0"])
+            .spawn()
+            .unwrap();
+        let pid = child.id();
+        assert!(child.wait().unwrap().success());
+        assert_eq!(process_identity(pid).unwrap(), None);
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn zombie_pid_has_no_identity() {
+        let mut child = Command::new("sh").args(["-c", "exit 0"]).spawn().unwrap();
+        std::thread::sleep(std::time::Duration::from_millis(200));
+        assert_eq!(process_identity(child.id()).unwrap(), None);
+        let _ = child.wait();
     }
 }

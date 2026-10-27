@@ -1,7 +1,7 @@
 //! Exercise terminal attach, bounded output, and control responsiveness.
 
 use std::{
-    sync::Arc,
+    sync::{Arc, mpsc},
     thread,
     time::{Duration, Instant},
 };
@@ -59,11 +59,17 @@ fn terminal_output_does_not_block_control_requests() {
         .unwrap();
     let mut terminal = terminal;
 
+    // Keep the responsiveness fixture below the queue cap on slower transports.
+    // Queue overflow and detachment are exercised separately below.
+    let (in_flight, consumed) = mpsc::sync_channel(16);
     let producer = {
         let hub = Arc::clone(&hub);
         thread::spawn(move || {
             let chunk = vec![b'x'; MAX_TERMINAL_PAYLOAD];
             for _ in 0..160 {
+                if in_flight.send(()).is_err() {
+                    break;
+                }
                 hub.publish(stream_id, &chunk).unwrap();
                 thread::sleep(Duration::from_millis(1));
             }
@@ -74,6 +80,7 @@ fn terminal_output_does_not_block_control_requests() {
         while bytes < 10 * 1024 * 1024 {
             let frame = terminal.next_frame().unwrap();
             bytes += frame.payload().len();
+            consumed.recv().unwrap();
         }
         bytes
     });
@@ -89,6 +96,35 @@ fn terminal_output_does_not_block_control_requests() {
     producer.join().unwrap();
     assert_eq!(reader.join().unwrap(), 10 * 1024 * 1024);
     drop(control);
+    server.stop();
+}
+
+#[test]
+fn terminal_reader_resumes_after_pipe_backpressure() {
+    let (_temp, paths) = test_paths();
+    let hub = Arc::new(TerminalHub::new(TerminalLimits::default()).unwrap());
+    let stream_id = hub.create_session().unwrap();
+    let mut server = start_server(&paths, Arc::clone(&hub), Duration::from_secs(2));
+    let mut terminal = IpcClient::connect(&paths)
+        .unwrap()
+        .attach_terminal(stream_id, None)
+        .unwrap();
+
+    let payload = vec![b'b'; 8 * MAX_TERMINAL_PAYLOAD];
+    hub.publish(stream_id, &payload).unwrap();
+    // Let the transport buffer fill while staying below the subscriber queue cap.
+    thread::sleep(Duration::from_millis(100));
+    let mut received = Vec::new();
+    while received.len() < payload.len() {
+        let frame = terminal
+            .next_frame()
+            .expect("buffer pressure must not truncate output");
+        received.extend_from_slice(frame.payload());
+    }
+    assert_eq!(received, payload);
+    assert_eq!(hub.session(stream_id).unwrap().detached_total(), 0);
+
+    drop(terminal);
     server.stop();
 }
 
@@ -146,8 +182,9 @@ fn idle_terminal_stream_waits_for_later_output() {
     let (_temp, paths) = test_paths();
     let hub = Arc::new(TerminalHub::new(TerminalLimits::default()).unwrap());
     let stream_id = hub.create_session().unwrap();
-    let mut server = start_server(&paths, Arc::clone(&hub), Duration::from_millis(100));
-    let mut terminal = IpcClient::connect_with_timeout(&paths, Duration::from_millis(100))
+    let timeout = Duration::from_secs(2);
+    let mut server = start_server(&paths, Arc::clone(&hub), timeout);
+    let mut terminal = IpcClient::connect_with_timeout(&paths, timeout)
         .unwrap()
         .attach_terminal(stream_id, None)
         .unwrap();
@@ -156,7 +193,8 @@ fn idle_terminal_stream_waits_for_later_output() {
         let frame = terminal.next_frame();
         (terminal, frame)
     });
-    thread::sleep(Duration::from_millis(250));
+    // Wait longer than the control timeout; the attached stream must stay open.
+    thread::sleep(Duration::from_millis(2_500));
     hub.publish(stream_id, b"late-output").unwrap();
     let (terminal, frame) = reader.join().unwrap();
     let frame = frame.expect("idle stream must keep waiting for output");

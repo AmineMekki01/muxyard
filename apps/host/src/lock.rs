@@ -135,6 +135,10 @@ impl HostLock {
             Some(identity) if identity.start_identity == info.process_start => {
                 Ok(LockState::Running(info))
             }
+            Some(_) if cfg!(windows) && !info.process_start.starts_with("windows:") => {
+                // A live older host has a different timestamp format; it is not verified stale.
+                Ok(LockState::Corrupt(path.to_path_buf()))
+            }
             _ => Ok(LockState::Stale(info)),
         }
     }
@@ -367,6 +371,26 @@ mod tests {
             LockState::Running(ref found) if found.instance_id == "fresh"
         ));
         drop(lock);
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn live_host_with_legacy_identity_is_not_replaced() {
+        let root = tempfile::tempdir().unwrap();
+        let path = root.path().join("host.lock");
+        let mut legacy = info("existing");
+        legacy.process_start = "2026-10-27T10:00:00.1234567+01:00".to_string();
+        let original = serde_json::to_vec(&legacy).unwrap();
+        fs::write(&path, &original).unwrap();
+        assert!(matches!(
+            HostLock::inspect(&path).unwrap(),
+            LockState::Corrupt(_)
+        ));
+        assert!(matches!(
+            HostLock::acquire(&path, info("replacement")),
+            Err(LockError::Corrupt(_))
+        ));
+        assert_eq!(fs::read(&path).unwrap(), original);
     }
 
     #[test]

@@ -15,5 +15,8 @@ tracing-subscriber.workspace = true
 [dev-dependencies]
 tempfile.workspace = true
 
+[target.'cfg(windows)'.dependencies]
+sysinfo = { version = "0.39.6", default-features = false, features = ["system"] }
+
 [lints]
 workspace = true

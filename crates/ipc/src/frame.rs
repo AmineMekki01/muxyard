@@ -33,9 +33,17 @@ fn read_frame_inner<R: Read>(
     let mut filled = 0;
     while filled < header.len() {
         match reader.read(&mut header[filled..]) {
+            Ok(0) if cfg!(windows) && deadline.is_some() => {
+                wait_for_deadline(deadline, &io::ErrorKind::WouldBlock.into())?;
+            }
             Ok(0) if filled == 0 => return Ok(None),
             Ok(0) => return Err(IpcError::TruncatedFrame),
             Ok(count) => filled += count,
+            Err(error)
+                if cfg!(windows) && deadline.is_some() && windows_pipe_read_would_block(&error) =>
+            {
+                wait_for_deadline(deadline, &error)?;
+            }
             Err(error) if error.kind() == io::ErrorKind::Interrupted => {}
             Err(error) if retryable_timeout(&error) => {
                 wait_for_deadline(deadline, &error)?;
@@ -54,8 +62,16 @@ fn read_frame_inner<R: Read>(
     let mut filled = 0;
     while filled < payload.len() {
         match reader.read(&mut payload[filled..]) {
+            Ok(0) if cfg!(windows) && deadline.is_some() => {
+                wait_for_deadline(deadline, &io::ErrorKind::WouldBlock.into())?;
+            }
             Ok(0) => return Err(IpcError::TruncatedFrame),
             Ok(count) => filled += count,
+            Err(error)
+                if cfg!(windows) && deadline.is_some() && windows_pipe_read_would_block(&error) =>
+            {
+                wait_for_deadline(deadline, &error)?;
+            }
             Err(error) if error.kind() == io::ErrorKind::Interrupted => {}
             Err(error) if retryable_timeout(&error) => {
                 wait_for_deadline(deadline, &error)?;
@@ -104,6 +120,10 @@ fn write_all_until<W: Write>(
 ) -> Result<(), IpcError> {
     while !bytes.is_empty() {
         match writer.write(bytes) {
+            Ok(0) if cfg!(windows) && deadline.is_some() => {
+                // A full PIPE_NOWAIT buffer makes no progress until the peer reads.
+                wait_for_deadline(deadline, &io::ErrorKind::WouldBlock.into())?;
+            }
             Ok(0) => return Err(IpcError::Io(io::ErrorKind::WriteZero.into())),
             Ok(count) => bytes = &bytes[count..],
             Err(error) if error.kind() == io::ErrorKind::Interrupted => {}
@@ -121,6 +141,17 @@ fn retryable_timeout(error: &io::Error) -> bool {
         error.kind(),
         io::ErrorKind::TimedOut | io::ErrorKind::WouldBlock
     )
+}
+
+const WINDOWS_ERROR_NO_DATA: i32 = 232;
+
+fn windows_pipe_read_would_block(error: &io::Error) -> bool {
+    // A nonblocking Windows named pipe can report no data as a broken pipe or
+    // ERROR_NO_DATA before the peer writes. While a deadline remains, retry
+    // those as would-block; the deadline bounds a real disconnect.
+    cfg!(windows)
+        && (error.kind() == io::ErrorKind::BrokenPipe
+            || error.raw_os_error() == Some(WINDOWS_ERROR_NO_DATA))
 }
 
 fn wait_for_deadline(deadline: Option<Instant>, error: &io::Error) -> Result<(), IpcError> {
@@ -195,6 +226,161 @@ mod tests {
             write_frame(&mut buffer, &vec![0_u8; MAX_FRAME_BYTES + 1]),
             Err(IpcError::FrameTooLarge)
         ));
+    }
+
+    struct ZeroWriter;
+
+    impl Write for ZeroWriter {
+        fn write(&mut self, _buffer: &[u8]) -> io::Result<usize> {
+            Ok(0)
+        }
+
+        fn flush(&mut self) -> io::Result<()> {
+            Ok(())
+        }
+    }
+
+    #[test]
+    fn zero_write_without_deadline_is_an_error() {
+        assert!(matches!(
+            write_frame(&mut ZeroWriter, b"payload"),
+            Err(IpcError::Io(error)) if error.kind() == io::ErrorKind::WriteZero
+        ));
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn windows_zero_writes_preserve_partial_header_and_payload() {
+        struct BackpressuredWriter {
+            calls: usize,
+            bytes: Vec<u8>,
+        }
+
+        impl Write for BackpressuredWriter {
+            fn write(&mut self, buffer: &[u8]) -> io::Result<usize> {
+                self.calls += 1;
+                if matches!(self.calls, 1 | 3 | 5 | 7) {
+                    return Ok(0);
+                }
+                let count = buffer.len().min(2);
+                self.bytes.extend_from_slice(&buffer[..count]);
+                Ok(count)
+            }
+
+            fn flush(&mut self) -> io::Result<()> {
+                Ok(())
+            }
+        }
+
+        let mut writer = BackpressuredWriter {
+            calls: 0,
+            bytes: Vec::new(),
+        };
+        write_frame_until(
+            &mut writer,
+            b"payload",
+            Instant::now() + Duration::from_secs(1),
+        )
+        .expect("a full pipe buffer must not truncate a frame");
+        let mut expected = Vec::new();
+        write_frame(&mut expected, b"payload").unwrap();
+        assert_eq!(writer.bytes, expected);
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn windows_zero_writes_stop_at_the_deadline() {
+        assert!(matches!(
+            write_frame_until(
+                &mut ZeroWriter,
+                b"payload",
+                Instant::now() + Duration::from_millis(20),
+            ),
+            Err(IpcError::Timeout)
+        ));
+    }
+
+    #[cfg(not(windows))]
+    #[test]
+    fn zero_write_with_deadline_is_an_error_on_unix() {
+        assert!(matches!(
+            write_frame_until(
+                &mut ZeroWriter,
+                b"payload",
+                Instant::now() + Duration::from_millis(20),
+            ),
+            Err(IpcError::Io(error)) if error.kind() == io::ErrorKind::WriteZero
+        ));
+    }
+
+    #[cfg(windows)]
+    struct PendingThenData {
+        pending_sent: bool,
+        data: Vec<u8>,
+        offset: usize,
+    }
+
+    #[cfg(windows)]
+    impl Read for PendingThenData {
+        fn read(&mut self, buffer: &mut [u8]) -> io::Result<usize> {
+            if !self.pending_sent {
+                self.pending_sent = true;
+                return Ok(0);
+            }
+            let count = buffer.len().min(self.data.len() - self.offset);
+            buffer[..count].copy_from_slice(&self.data[self.offset..self.offset + count]);
+            self.offset += count;
+            Ok(count)
+        }
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn windows_zero_reads_retry_until_payload_arrives() {
+        let mut frame = Vec::new();
+        write_frame(&mut frame, b"payload").unwrap();
+        let mut reader = PendingThenData {
+            pending_sent: false,
+            data: frame,
+            offset: 0,
+        };
+        let result =
+            read_frame_until(&mut reader, Instant::now() + Duration::from_millis(100)).unwrap();
+        assert_eq!(result.as_deref(), Some(b"payload".as_slice()));
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn windows_pipe_no_data_retries_until_payload_arrives() {
+        struct NoDataThenData {
+            pending_sent: bool,
+            data: Vec<u8>,
+            offset: usize,
+        }
+
+        impl Read for NoDataThenData {
+            fn read(&mut self, buffer: &mut [u8]) -> io::Result<usize> {
+                if !self.pending_sent {
+                    self.pending_sent = true;
+                    return Err(io::Error::from_raw_os_error(232));
+                }
+                let count = buffer.len().min(self.data.len() - self.offset);
+                buffer[..count].copy_from_slice(&self.data[self.offset..self.offset + count]);
+                self.offset += count;
+                Ok(count)
+            }
+        }
+
+        let mut frame = Vec::new();
+        write_frame(&mut frame, b"payload").unwrap();
+        let mut reader = NoDataThenData {
+            pending_sent: false,
+            data: frame,
+            offset: 0,
+        };
+        let result =
+            read_frame_until(&mut reader, Instant::now() + Duration::from_millis(100)).unwrap();
+        assert_eq!(result.as_deref(), Some(b"payload".as_slice()));
     }
 
     #[test]

@@ -15,6 +15,8 @@ use std::{
     fs,
     path::{Path, PathBuf},
 };
+#[cfg(windows)]
+use std::{path::Path, sync::OnceLock};
 
 #[cfg(windows)]
 use std::process::Command;
@@ -68,6 +70,8 @@ pub struct IpcServer {
     connections: Arc<Mutex<Vec<JoinHandle<()>>>>,
     #[cfg(unix)]
     socket_path: PathBuf,
+    #[cfg(windows)]
+    pipe_name: String,
 }
 
 impl IpcServer {
@@ -162,6 +166,9 @@ impl IpcServer {
         layout_store: Option<Arc<dyn WorkspaceLayoutStore>>,
         options: IpcOptions,
     ) -> Result<Self, IpcError> {
+        #[cfg(windows)]
+        let pipe_name = windows_pipe_name(paths)
+            .ok_or_else(|| IpcError::Endpoint("current-user SID is unavailable".to_string()))?;
         let listener = create_listener(paths)?;
         #[cfg(unix)]
         let socket_path = paths.local_socket_path();
@@ -194,6 +201,8 @@ impl IpcServer {
             connections,
             #[cfg(unix)]
             socket_path,
+            #[cfg(windows)]
+            pipe_name,
         })
     }
 
@@ -201,6 +210,11 @@ impl IpcServer {
     pub fn stop(&mut self) {
         if self.stop.swap(true, Ordering::SeqCst) {
             return;
+        }
+        #[cfg(windows)]
+        if let Ok(name) = self.pipe_name.as_str().to_ns_name::<GenericNamespaced>() {
+            // Wake the blocking accept loop so it can observe the stop flag.
+            let _ = LocalSocketStream::connect(name);
         }
         if let Some(thread) = self.accept_thread.take()
             && thread.join().is_err()
@@ -909,8 +923,8 @@ fn configure_stream(stream: &LocalSocketStream, timeout: Duration) -> Result<(),
 
 #[cfg(windows)]
 fn configure_stream(stream: &LocalSocketStream, _timeout: Duration) -> Result<(), IpcError> {
-    // Named pipes in this transport do not expose socket-style timeouts.
-    // Nonblocking I/O plus the frame deadline provides the bound instead.
+    // Named pipes do not expose socket-style timeouts. The frame reader retries
+    // empty/no-data Windows pipe reads while a deadline is active.
     stream.set_nonblocking(true)?;
     Ok(())
 }
@@ -983,14 +997,14 @@ fn secure_socket(path: &Path) -> Result<(), IpcError> {
 }
 
 #[cfg(windows)]
-fn create_listener(_paths: &PlatformPaths) -> Result<LocalSocketListener, IpcError> {
+fn create_listener(paths: &PlatformPaths) -> Result<LocalSocketListener, IpcError> {
     use interprocess::os::windows::local_socket::ListenerOptionsExt;
     use interprocess::os::windows::security_descriptor::SecurityDescriptor;
     use widestring::U16CString;
 
     let sid = windows_user_sid()
         .ok_or_else(|| IpcError::Endpoint("current-user SID is unavailable".to_string()))?;
-    let pipe_name = windows_pipe_name_for_sid(&sid);
+    let pipe_name = windows_pipe_name_for_sid(&sid, &paths.runtime_dir);
     let name = pipe_name.as_str().to_ns_name::<GenericNamespaced>()?;
     let sddl = format!("D:P(A;;GA;;;{sid})");
     let wide =
@@ -998,7 +1012,7 @@ fn create_listener(_paths: &PlatformPaths) -> Result<LocalSocketListener, IpcErr
     let descriptor = SecurityDescriptor::deserialize(wide.as_ucstr()).map_err(IpcError::Io)?;
     ListenerOptions::new()
         .name(name)
-        .nonblocking(ListenerNonblockingMode::Accept)
+        .nonblocking(ListenerNonblockingMode::Neither)
         .security_descriptor(descriptor)
         .create_sync()
         .map_err(IpcError::Io)
@@ -1006,6 +1020,12 @@ fn create_listener(_paths: &PlatformPaths) -> Result<LocalSocketListener, IpcErr
 
 #[cfg(windows)]
 fn windows_user_sid() -> Option<String> {
+    static SID: OnceLock<Option<String>> = OnceLock::new();
+    SID.get_or_init(discover_windows_user_sid).clone()
+}
+
+#[cfg(windows)]
+fn discover_windows_user_sid() -> Option<String> {
     let output = Command::new("whoami")
         .args(["/user", "/fo", "csv", "/nh"])
         .output()
@@ -1033,15 +1053,19 @@ fn windows_user_sid() -> Option<String> {
 }
 
 #[cfg(windows)]
-pub(crate) fn windows_pipe_name() -> Option<String> {
-    windows_user_sid().map(|sid| windows_pipe_name_for_sid(&sid))
+pub(crate) fn windows_pipe_name(paths: &PlatformPaths) -> Option<String> {
+    windows_user_sid().map(|sid| windows_pipe_name_for_sid(&sid, &paths.runtime_dir))
 }
 
 #[cfg(windows)]
-fn windows_pipe_name_for_sid(sid: &str) -> String {
+fn windows_pipe_name_for_sid(sid: &str, runtime_dir: &Path) -> String {
     use sha2::{Digest, Sha256};
 
-    let digest = Sha256::digest(sid.as_bytes());
+    let mut hasher = Sha256::new();
+    hasher.update(sid.as_bytes());
+    hasher.update([0]);
+    hasher.update(runtime_dir.to_string_lossy().as_bytes());
+    let digest = hasher.finalize();
     let suffix = digest[..8]
         .iter()
         .map(|byte| format!("{byte:02x}"))
@@ -1050,6 +1074,23 @@ fn windows_pipe_name_for_sid(sid: &str) -> String {
 }
 
 #[cfg(not(any(unix, windows)))]
-fn create_listener(_paths: &PlatformPaths) -> Result<LocalSocketListener, IpcError> {
+fn create_listener(paths: &PlatformPaths) -> Result<LocalSocketListener, IpcError> {
     Err(IpcError::UnsupportedPlatform)
+}
+
+#[cfg(all(test, windows))]
+mod windows_tests {
+    use super::*;
+
+    #[test]
+    fn pipe_names_are_scoped_to_the_runtime_directory() {
+        let sid = "S-1-5-21-1000";
+        let first = windows_pipe_name_for_sid(sid, Path::new("C:\\Temp\\one"));
+        let second = windows_pipe_name_for_sid(sid, Path::new("C:\\Temp\\two"));
+        assert_eq!(
+            first,
+            windows_pipe_name_for_sid(sid, Path::new("C:\\Temp\\one"))
+        );
+        assert_ne!(first, second);
+    }
 }

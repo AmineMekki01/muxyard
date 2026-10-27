@@ -1,7 +1,7 @@
 //! Database connection setup and migration entry points.
 
 use std::{
-    fs::{self, OpenOptions},
+    fs::{self},
     io,
     path::{Path, PathBuf},
     time::Duration,
@@ -64,7 +64,7 @@ impl Database {
         #[cfg(unix)]
         {
             use std::os::unix::fs::OpenOptionsExt;
-            let file = OpenOptions::new()
+            let file = fs::OpenOptions::new()
                 .read(true)
                 .write(true)
                 .create(true)

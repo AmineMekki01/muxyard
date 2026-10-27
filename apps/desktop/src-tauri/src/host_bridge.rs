@@ -252,7 +252,11 @@ impl HostBridge {
     }
 
     fn status_once(&self) -> Result<HostStatusResponse, ApiError> {
-        let mut client = IpcClient::connect(&self.paths).map_err(map_ipc)?;
+        let mut client = IpcClient::connect(&self.paths).map_err(|error| {
+            #[cfg(test)]
+            eprintln!("host bridge status connect failed: {error:?}");
+            map_ipc(error)
+        })?;
         let status = client.host_status().map_err(map_ipc)?;
         validate_status(status)
     }
@@ -382,14 +386,24 @@ mod tests {
         time::{Duration, Instant},
     };
 
+    #[cfg(unix)]
     use muxyard_contracts::{TerminalCloseRequest, TerminalInputRequest, TerminalSpawnRequest};
     use muxyard_ipc::IpcServer;
     use muxyard_platform::PlatformPaths;
+    #[cfg(unix)]
     use muxyard_terminal::{TerminalFrameKind, TerminalHub, TerminalLimits, TerminalService};
     use tauri::ipc::InvokeResponseBody;
     use tempfile::TempDir;
 
     use super::*;
+
+    static SERVER_TEST_LOCK: Mutex<()> = Mutex::new(());
+
+    fn server_guard() -> std::sync::MutexGuard<'static, ()> {
+        SERVER_TEST_LOCK
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner())
+    }
 
     fn status(instance: &str, protocol: u8) -> HostStatusResponse {
         HostStatusResponse {
@@ -416,6 +430,13 @@ mod tests {
             retry_interval: Duration::from_millis(10),
             watch_interval: Duration::from_millis(10),
             watch_failures: 3,
+        }
+    }
+
+    fn server_options() -> HostBridgeOptions {
+        HostBridgeOptions {
+            startup_timeout: Duration::from_secs(3),
+            ..options()
         }
     }
 
@@ -474,10 +495,14 @@ mod tests {
 
     #[test]
     fn launches_once_and_reuses_the_same_host() {
+        let _serial = server_guard();
         let (_temp, paths) = paths();
         let fake = Arc::new(FakeLauncher::new(paths.clone(), status("instance-1", 1)));
-        let bridge =
-            HostBridge::with_launcher(paths, Arc::clone(&fake) as Arc<dyn HostLauncher>, options());
+        let bridge = HostBridge::with_launcher(
+            paths,
+            Arc::clone(&fake) as Arc<dyn HostLauncher>,
+            server_options(),
+        );
 
         let first = bridge.connect_or_launch().unwrap();
         assert_eq!(first.instance_id, "instance-1");
@@ -490,10 +515,14 @@ mod tests {
 
     #[test]
     fn reconnects_after_host_loss() {
+        let _serial = server_guard();
         let (_temp, paths) = paths();
         let fake = Arc::new(FakeLauncher::new(paths.clone(), status("instance-2", 1)));
-        let bridge =
-            HostBridge::with_launcher(paths, Arc::clone(&fake) as Arc<dyn HostLauncher>, options());
+        let bridge = HostBridge::with_launcher(
+            paths,
+            Arc::clone(&fake) as Arc<dyn HostLauncher>,
+            server_options(),
+        );
 
         assert_eq!(
             bridge.connect_or_launch().unwrap().instance_id,
@@ -509,11 +538,28 @@ mod tests {
 
     #[test]
     fn incompatible_host_is_reported_without_launching_again() {
+        let _serial = server_guard();
         let (_temp, paths) = paths();
         let mut server = IpcServer::start(&paths, status("old-host", 2)).unwrap();
         let fake = Arc::new(FakeLauncher::new(paths.clone(), status("unused", 1)));
-        let bridge =
-            HostBridge::with_launcher(paths, Arc::clone(&fake) as Arc<dyn HostLauncher>, options());
+        let bridge = HostBridge::with_launcher(
+            paths,
+            Arc::clone(&fake) as Arc<dyn HostLauncher>,
+            server_options(),
+        );
+        let deadline = Instant::now() + Duration::from_secs(3);
+        loop {
+            match bridge.status() {
+                Ok(_) => break,
+                Err(error) if error.code == ErrorCode::HostOffline => {
+                    if Instant::now() >= deadline {
+                        break;
+                    }
+                    thread::sleep(Duration::from_millis(10));
+                }
+                Err(_) => break,
+            }
+        }
 
         let error = bridge.connect_or_launch().unwrap_err();
         assert_eq!(error.code, ErrorCode::UnsupportedCapability);
@@ -553,10 +599,14 @@ mod tests {
 
     #[test]
     fn watcher_sends_an_initial_snapshot_and_stops_cleanly() {
+        let _serial = server_guard();
         let (_temp, paths) = paths();
         let fake = Arc::new(FakeLauncher::new(paths.clone(), status("watch-host", 1)));
-        let bridge =
-            HostBridge::with_launcher(paths, Arc::clone(&fake) as Arc<dyn HostLauncher>, options());
+        let bridge = HostBridge::with_launcher(
+            paths,
+            Arc::clone(&fake) as Arc<dyn HostLauncher>,
+            server_options(),
+        );
         assert_eq!(
             bridge.connect_or_launch().unwrap().instance_id,
             "watch-host"
@@ -599,10 +649,14 @@ mod tests {
 
     #[test]
     fn watcher_reports_offline_after_bounded_failures() {
+        let _serial = server_guard();
         let (_temp, paths) = paths();
         let fake = Arc::new(FakeLauncher::new(paths.clone(), status("lost-host", 1)));
-        let bridge =
-            HostBridge::with_launcher(paths, Arc::clone(&fake) as Arc<dyn HostLauncher>, options());
+        let bridge = HostBridge::with_launcher(
+            paths,
+            Arc::clone(&fake) as Arc<dyn HostLauncher>,
+            server_options(),
+        );
         assert_eq!(bridge.connect_or_launch().unwrap().instance_id, "lost-host");
         fake.stop();
 
@@ -651,8 +705,10 @@ mod tests {
         ));
     }
 
+    #[cfg(unix)]
     #[test]
     fn terminal_bridge_spawns_inputs_attaches_and_closes() {
+        let _serial = server_guard();
         let (_temp, paths) = paths();
         let hub = Arc::new(TerminalHub::new(TerminalLimits::default()).unwrap());
         let service = Arc::new(TerminalService::new(hub));

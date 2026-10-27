@@ -195,14 +195,14 @@ fn connect_stream(paths: &PlatformPaths) -> Result<LocalSocketStream, IpcError> 
 }
 
 #[cfg(windows)]
-fn connect_stream(_paths: &PlatformPaths) -> Result<LocalSocketStream, IpcError> {
-    let pipe_name = crate::server::windows_pipe_name()
+fn connect_stream(paths: &PlatformPaths) -> Result<LocalSocketStream, IpcError> {
+    let pipe_name = crate::server::windows_pipe_name(paths)
         .ok_or_else(|| IpcError::Endpoint("current-user SID is unavailable".to_string()))?;
     let name = pipe_name.as_str().to_ns_name::<GenericNamespaced>()?;
     LocalSocketStream::connect(name).map_err(IpcError::Io)
 }
 
 #[cfg(not(any(unix, windows)))]
-fn connect_stream(_paths: &PlatformPaths) -> Result<LocalSocketStream, IpcError> {
+fn connect_stream(paths: &PlatformPaths) -> Result<LocalSocketStream, IpcError> {
     Err(IpcError::UnsupportedPlatform)
 }

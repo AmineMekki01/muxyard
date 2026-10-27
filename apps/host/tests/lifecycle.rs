@@ -1,30 +1,72 @@
 //! Exercise the real detached host lifecycle and stale-record reconciliation.
 
 use std::{
-    fs,
+    fs, io,
     path::PathBuf,
     process::{Command, Output, Stdio},
     thread,
     time::{Duration, Instant},
 };
 
+#[cfg(unix)]
 use muxyard_contracts::{
     Id, TerminalCloseRequest, TerminalInputRequest, TerminalLayoutNode, TerminalSpawnRequest,
     TerminalSpawnResponse, TerminalTabLayout, WorkspaceLayout, WorkspaceLayoutGetRequest,
     WorkspaceLayoutSaveRequest, WorkspaceLayoutSnapshot,
 };
+use muxyard_ipc::IpcClient;
+#[cfg(unix)]
 use muxyard_ipc::{
-    IpcClient, IpcResponse, TERMINAL_CLOSE_METHOD, TERMINAL_INPUT_METHOD, TERMINAL_SPAWN_METHOD,
+    IpcResponse, TERMINAL_CLOSE_METHOD, TERMINAL_INPUT_METHOD, TERMINAL_SPAWN_METHOD,
     WORKSPACE_LAYOUT_GET_METHOD, WORKSPACE_LAYOUT_SAVE_METHOD,
 };
 use muxyard_platform::PlatformPaths;
 use muxyard_storage::Database;
 use serde_json::Value;
+#[cfg(unix)]
 use uuid::Uuid;
 
 struct HostGuard {
     root: PathBuf,
     _temp: tempfile::TempDir,
+}
+
+fn command_output(command: &mut Command, timeout: Duration) -> io::Result<Output> {
+    // File capture avoids waiting for EOF from handles inherited by a detached child.
+    let stdout = tempfile::NamedTempFile::new()?;
+    let stderr = tempfile::NamedTempFile::new()?;
+    let mut child = command
+        .stdin(Stdio::null())
+        .stdout(Stdio::from(stdout.reopen()?))
+        .stderr(Stdio::from(stderr.reopen()?))
+        .spawn()?;
+    let deadline = Instant::now() + timeout;
+    let status = loop {
+        match child.try_wait() {
+            Ok(Some(status)) => break status,
+            Ok(None) if Instant::now() < deadline => {
+                thread::sleep(Duration::from_millis(20));
+            }
+            result => {
+                let _ = child.kill();
+                let _ = child.wait();
+                result?;
+                return Err(io::Error::new(
+                    io::ErrorKind::TimedOut,
+                    format!(
+                        "host command {command:?} exceeded {timeout:?}\nstdout: {}\nstderr: {}",
+                        String::from_utf8_lossy(&fs::read(stdout.path())?),
+                        String::from_utf8_lossy(&fs::read(stderr.path())?),
+                    ),
+                ));
+            }
+        }
+    };
+    Ok(Output {
+        status,
+        stdout: fs::read(stdout.path())?,
+        stderr: fs::read(stderr.path())?,
+    })
 }
 
 impl HostGuard {
@@ -48,10 +90,11 @@ impl HostGuard {
     }
 
     fn output(&self, args: &[&str]) -> Output {
-        self.command()
-            .args(args)
-            .output()
-            .expect("host should start")
+        command_output(self.command().args(args), Duration::from_secs(20)).unwrap_or_else(|error| {
+            let startup =
+                fs::read_to_string(self.root.join("runtime/host-startup.log")).unwrap_or_default();
+            panic!("{error}\nhost startup diagnostics: {startup}");
+        })
     }
 
     fn status_json(&self) -> (i32, Value) {
@@ -79,8 +122,20 @@ impl HostGuard {
 
 impl Drop for HostGuard {
     fn drop(&mut self) {
-        let _ = self.output(&["stop"]);
+        let _ = command_output(self.command().arg("stop"), Duration::from_secs(20));
     }
+}
+
+#[test]
+fn foreground_command_timeout_terminates_the_child() {
+    let host = HostGuard::new();
+    let error = command_output(host.command().arg("run"), Duration::from_millis(250))
+        .expect_err("foreground host must remain running until stopped");
+    assert_eq!(error.kind(), io::ErrorKind::TimedOut);
+    assert!(error.to_string().contains("stdout:"));
+    assert!(error.to_string().contains("stderr:"));
+    let (_, status) = host.status_json();
+    assert_eq!(status["running"], false);
 }
 
 fn wait_for_status(

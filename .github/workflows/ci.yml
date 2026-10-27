@@ -75,6 +75,7 @@ jobs:
       - name: Lint Rust
         run: cargo clippy --locked --workspace --all-targets --all-features -- -D warnings
       - name: Test Rust
+        timeout-minutes: 10
         run: cargo test --locked --workspace
       - name: Test contract generation feature
         run: cargo test --locked -p muxyard-contracts --all-features

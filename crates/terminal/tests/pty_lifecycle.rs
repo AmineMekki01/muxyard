@@ -124,6 +124,10 @@ fn ls_output_contains_color_sequences() {
     let mut session = spawn(&hub, temp.path().to_path_buf());
     let subscription = subscribe(&hub, &session);
 
+    // GNU ls only emits colors when asked; BSD/macOS ls honors CLICOLOR_FORCE.
+    #[cfg(target_os = "linux")]
+    session.write(b"ls --color=always\n").unwrap();
+    #[cfg(not(target_os = "linux"))]
     session.write(b"ls\n").unwrap();
     let output = read_until(&subscription, b"file.txt", Duration::from_secs(5));
     assert!(
