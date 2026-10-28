@@ -17,7 +17,7 @@ use uuid::Uuid;
 
 use crate::{
     PtyError, PtyExitStatus, PtySession, PtySessionConfig, TerminalHub, TerminalHubError,
-    TerminalSubscription,
+    TerminalSubscription, pty::DEFAULT_OUTPUT_TAIL_BYTES,
 };
 
 /// Persistence hook for terminal session metadata.
@@ -42,6 +42,7 @@ pub struct TerminalService {
     sessions: Mutex<HashMap<Uuid, PtySession>>,
     store: Option<Arc<dyn TerminalSessionStore>>,
     history_dir: Option<PathBuf>,
+    output_tail_bytes: usize,
 }
 
 impl TerminalService {
@@ -52,6 +53,7 @@ impl TerminalService {
             sessions: Mutex::new(HashMap::new()),
             store: None,
             history_dir: None,
+            output_tail_bytes: DEFAULT_OUTPUT_TAIL_BYTES,
         }
     }
 
@@ -62,6 +64,7 @@ impl TerminalService {
             sessions: Mutex::new(HashMap::new()),
             store: None,
             history_dir: Some(history_dir),
+            output_tail_bytes: DEFAULT_OUTPUT_TAIL_BYTES,
         }
     }
 
@@ -76,7 +79,14 @@ impl TerminalService {
             sessions: Mutex::new(HashMap::new()),
             store: Some(store),
             history_dir: Some(history_dir),
+            output_tail_bytes: DEFAULT_OUTPUT_TAIL_BYTES,
         }
+    }
+
+    /// Set the bounded raw output retained for each terminal session.
+    pub fn with_output_tail_bytes(mut self, output_tail_bytes: usize) -> Self {
+        self.output_tail_bytes = output_tail_bytes;
+        self
     }
 
     /// Output hub shared with IPC subscribers.
@@ -122,6 +132,7 @@ impl TerminalService {
                 cwd,
                 rows: request.rows,
                 cols: request.cols,
+                output_tail_bytes: self.output_tail_bytes,
                 environment,
             },
             Arc::clone(&self.hub),

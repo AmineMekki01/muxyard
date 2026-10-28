@@ -4,6 +4,15 @@ use serde::{Deserialize, Serialize};
 
 use crate::Id;
 
+/// Bounded renderer settings for a terminal pane.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+#[cfg_attr(feature = "typescript", derive(ts_rs::TS))]
+pub struct TerminalRenderConfig {
+    /// Maximum scrollback lines retained by the renderer.
+    pub scrollback_lines: u32,
+}
+
 /// Request to create a native PTY-backed shell session.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]

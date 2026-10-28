@@ -4,6 +4,7 @@ import { Channel, invoke } from "@tauri-apps/api/core";
 import type {
   TerminalCloseRequest,
   TerminalInputRequest,
+  TerminalRenderConfig,
   TerminalResizeRequest,
   TerminalSnapshotRequest,
   TerminalSnapshotResponse,
@@ -17,6 +18,10 @@ export async function spawnTerminal(
   request: TerminalSpawnRequest,
 ): Promise<TerminalSpawnResponse> {
   return invoke<TerminalSpawnResponse>("terminal_spawn", { request });
+}
+
+export async function getTerminalRenderConfig(): Promise<TerminalRenderConfig> {
+  return invoke<TerminalRenderConfig>("terminal_render_config");
 }
 
 export async function attachTerminal(

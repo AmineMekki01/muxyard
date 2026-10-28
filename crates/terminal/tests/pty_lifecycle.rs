@@ -25,6 +25,7 @@ fn config(cwd: PathBuf) -> PtySessionConfig {
         rows: 24,
         cols: 80,
         environment: vec![("TERM".into(), "xterm-256color".into())],
+        ..PtySessionConfig::default()
     }
 }
 
@@ -87,6 +88,63 @@ fn shell_echo_and_cwd_are_visible() {
 
     session.close().unwrap();
     assert_eq!(hub.session_count(), 0);
+}
+
+#[test]
+fn snapshot_respects_configured_tail_bound() {
+    let temp = tempfile::tempdir().unwrap();
+    let hub = hub();
+    let mut config = config(temp.path().to_path_buf());
+    config.output_tail_bytes = 64;
+    let mut session = PtySession::spawn(config, Arc::clone(&hub)).unwrap();
+    let subscription = subscribe(&hub, &session);
+
+    session
+        .write(b"printf '%0256d' 0 | tr '0' 'x'; printf '\\n'\n")
+        .unwrap();
+    read_until(&subscription, b"xxxx", Duration::from_secs(5));
+    let snapshot = session.snapshot();
+    assert!(!snapshot.is_empty());
+    assert!(
+        snapshot.len() <= 64,
+        "tail grew to {} bytes",
+        snapshot.len()
+    );
+
+    session.close().unwrap();
+}
+
+#[test]
+fn large_output_keeps_the_configured_tail_bounded() {
+    let temp = tempfile::tempdir().unwrap();
+    let hub = hub();
+    let mut config = config(temp.path().to_path_buf());
+    config.output_tail_bytes = 64 * 1024;
+    let mut session = PtySession::spawn(config, Arc::clone(&hub)).unwrap();
+    let subscription = hub
+        .subscribe(session.stream_id(), Some(4 * 1024 * 1024))
+        .unwrap();
+
+    session
+        .write(b"head -c 600000 /dev/zero | tr '\\0' 'x'; printf '\\nDONE-%s\\n' \"$((1+1))\"\n")
+        .unwrap();
+    let output = read_until(&subscription, b"DONE-2", Duration::from_secs(10));
+    assert!(
+        output.len() > 500_000,
+        "fixture output was too small: {} bytes",
+        output.len()
+    );
+
+    let snapshot = session.snapshot();
+    assert!(!snapshot.is_empty());
+    assert!(
+        snapshot.len() <= 64 * 1024,
+        "large-output snapshot grew to {} bytes",
+        snapshot.len()
+    );
+    assert!(snapshot.contains(&b'x'), "newest output was not retained");
+
+    session.close().unwrap();
 }
 
 #[test]
@@ -224,6 +282,7 @@ fn shell_path_with_spaces_is_launched_without_interpolation() {
             rows: 24,
             cols: 80,
             environment: Vec::new(),
+            ..PtySessionConfig::default()
         },
         Arc::clone(&hub),
     )
@@ -290,6 +349,7 @@ fn missing_shell_is_rejected_before_stream_creation() {
             rows: 24,
             cols: 80,
             environment: Vec::new(),
+            ..PtySessionConfig::default()
         },
         Arc::clone(&hub),
     )

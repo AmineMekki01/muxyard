@@ -10,16 +10,34 @@ import { useCallback, useEffect, useRef, useState } from "react";
 
 import type { TerminalSpawnResponse } from "@muxyard/contracts";
 
+import { createLinkProvider } from "./links";
 import { TerminalIcon } from "./TerminalIcon";
 import { createResizeScheduler } from "./resize";
 import {
   attachTerminal,
   closeTerminal,
+  getTerminalRenderConfig,
   inputTerminal,
   resizeTerminal,
   snapshotTerminal,
   spawnTerminal,
 } from "./terminal";
+
+export const DEFAULT_SCROLLBACK_LINES = 10_000;
+export const HIDDEN_OUTPUT_LIMIT_BYTES = 256 * 1024;
+
+const HIDDEN_TRUNCATION_MARKER = "\r\n[Earlier hidden output truncated]\r\n";
+
+const SEARCH_OPTIONS = {
+  decorations: {
+    matchBackground: "#3b4f58",
+    matchBorder: "#56d4dd",
+    matchOverviewRuler: "#56d4dd",
+    activeMatchBackground: "#7a5c20",
+    activeMatchBorder: "#e3b341",
+    activeMatchColorOverviewRuler: "#e3b341",
+  },
+};
 
 type TerminalPaneProps = {
   title?: string;
@@ -64,6 +82,13 @@ export function TerminalPane({
   const terminalRef = useRef<Terminal | null>(null);
   const activeRef = useRef(active);
   activeRef.current = active;
+  const zoomHiddenRef = useRef(zoomHidden);
+  zoomHiddenRef.current = zoomHidden;
+  const hiddenOutputRef = useRef({
+    chunks: [] as Uint8Array[],
+    bytes: 0,
+    truncated: false,
+  });
   const [attempt, setAttempt] = useState(0);
   const [forceNew, setForceNew] = useState(false);
   const [restoreFailed, setRestoreFailed] = useState(false);
@@ -71,6 +96,10 @@ export function TerminalPane({
   const [session, setSession] = useState<TerminalSpawnResponse | null>(null);
   const [searchOpen, setSearchOpen] = useState(false);
   const [searchText, setSearchText] = useState("");
+  const [searchResults, setSearchResults] = useState({
+    index: -1,
+    count: 0,
+  });
   const searchInputRef = useRef<HTMLInputElement | null>(null);
   const isLost = (sessionLost || restoreFailed) && !forceNew;
 
@@ -88,11 +117,38 @@ export function TerminalPane({
     let dataDisposable: { dispose: () => void } | null = null;
     let resizeDisposable: { dispose: () => void } | null = null;
     let scrollDisposable: { dispose: () => void } | null = null;
+    let searchResultsDisposable: { dispose: () => void } | null = null;
+    let linkProviderDisposable: { dispose: () => void } | null = null;
 
     setError(null);
     setSession(null);
+    hiddenOutputRef.current = { chunks: [], bytes: 0, truncated: false };
+
+    const enqueueHiddenOutput = (chunk: Uint8Array) => {
+      const buffer = hiddenOutputRef.current;
+      buffer.chunks.push(chunk.slice());
+      buffer.bytes += chunk.byteLength;
+      while (
+        buffer.bytes > HIDDEN_OUTPUT_LIMIT_BYTES &&
+        buffer.chunks.length > 0
+      ) {
+        const excess = buffer.bytes - HIDDEN_OUTPUT_LIMIT_BYTES;
+        const first = buffer.chunks[0]!;
+        if (first.byteLength <= excess) {
+          buffer.chunks.shift();
+          buffer.bytes -= first.byteLength;
+        } else {
+          buffer.chunks[0] = first.slice(excess);
+          buffer.bytes -= excess;
+        }
+        buffer.truncated = true;
+      }
+    };
 
     const run = async () => {
+      const renderConfig = await getTerminalRenderConfig().catch(() => null);
+      const scrollback =
+        renderConfig?.scrollback_lines ?? DEFAULT_SCROLLBACK_LINES;
       const restoring = Boolean(sessionId) && !forceNew;
       const info = restoring
         ? {
@@ -132,7 +188,7 @@ export function TerminalPane({
         letterSpacing: 0.1,
         lineHeight: 1.35,
         minimumContrastRatio: 4.5,
-        scrollback: 5000,
+        scrollback,
         theme: {
           background: "#0f1a1f",
           foreground: "#e6edf0",
@@ -166,7 +222,15 @@ export function TerminalPane({
       searchAddonRef.current = searchAddon;
       terminal.loadAddon(fitAddon);
       terminal.loadAddon(searchAddon);
+      searchResultsDisposable = searchAddon.onDidChangeResults(
+        ({ resultIndex, resultCount }) => {
+          setSearchResults({ index: resultIndex, count: resultCount });
+        },
+      );
       terminal.open(container);
+      linkProviderDisposable = terminal.registerLinkProvider(
+        createLinkProvider(terminal),
+      );
       if (activeRef.current) terminal.focus();
 
       try {
@@ -215,7 +279,13 @@ export function TerminalPane({
 
       const channel = new Channel<ArrayBuffer>();
       channel.onmessage = (chunk) => {
-        if (alive) terminal?.write(new Uint8Array(chunk));
+        if (!alive) return;
+        const bytes = new Uint8Array(chunk);
+        if (activeRef.current && !zoomHiddenRef.current) {
+          terminal?.write(bytes);
+        } else {
+          enqueueHiddenOutput(bytes);
+        }
       };
       try {
         await attachTerminal(info.stream_id, channel);
@@ -264,6 +334,8 @@ export function TerminalPane({
       dataDisposable?.dispose();
       resizeDisposable?.dispose();
       scrollDisposable?.dispose();
+      searchResultsDisposable?.dispose();
+      linkProviderDisposable?.dispose();
       webgl?.dispose();
       fitAddonRef.current = null;
       searchAddonRef.current = null;
@@ -275,12 +347,21 @@ export function TerminalPane({
 
   useEffect(() => {
     if (!active || zoomHidden) return;
+    const terminal = terminalRef.current;
+    const buffer = hiddenOutputRef.current;
+    if (terminal) {
+      for (const chunk of buffer.chunks) terminal.write(chunk);
+      // Keep the marker visible after the retained tail; otherwise xterm's
+      // bounded scrollback can push a leading marker out of the viewport.
+      if (buffer.truncated) terminal.write(HIDDEN_TRUNCATION_MARKER);
+    }
+    hiddenOutputRef.current = { chunks: [], bytes: 0, truncated: false };
     try {
       fitAddonRef.current?.fit();
     } catch {
       // The pane may not have finished mounting yet.
     }
-    terminalRef.current?.focus();
+    terminal?.focus();
   }, [active, zoomed, zoomHidden]);
 
   useEffect(() => {
@@ -290,11 +371,19 @@ export function TerminalPane({
 
   const findNext = useCallback(() => {
     if (searchText && searchAddonRef.current) {
-      searchAddonRef.current.findNext(searchText);
+      searchAddonRef.current.findNext(searchText, SEARCH_OPTIONS);
+    }
+  }, [searchText]);
+
+  const findPrevious = useCallback(() => {
+    if (searchText && searchAddonRef.current) {
+      searchAddonRef.current.findPrevious(searchText, SEARCH_OPTIONS);
     }
   }, [searchText]);
 
   const closeSearch = () => {
+    searchAddonRef.current?.clearDecorations();
+    setSearchResults({ index: -1, count: 0 });
     setSearchOpen(false);
     terminalRef.current?.focus();
   };
@@ -459,13 +548,30 @@ export function TerminalPane({
             onKeyDown={(event) => {
               if (event.key === "Enter") {
                 event.preventDefault();
-                findNext();
+                if (event.shiftKey) {
+                  findPrevious();
+                } else {
+                  findNext();
+                }
               } else if (event.key === "Escape") {
                 event.preventDefault();
                 closeSearch();
               }
             }}
           />
+          <span className="terminal-search-count" aria-live="polite">
+            {searchResults.count > 0
+              ? `${searchResults.index + 1}/${searchResults.count}`
+              : "0/0"}
+          </span>
+          <button
+            type="button"
+            className="shell-button"
+            aria-label="Previous search result"
+            onClick={findPrevious}
+          >
+            Prev
+          </button>
           <button type="button" className="shell-button" onClick={findNext}>
             Next
           </button>

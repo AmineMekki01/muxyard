@@ -20,7 +20,9 @@ use uuid::Uuid;
 use crate::{TerminalHub, TerminalHubError};
 
 const READ_CHUNK_BYTES: usize = 16 * 1024;
-const OUTPUT_TAIL_BYTES: usize = 128 * 1024;
+
+/// Default retained raw output for one terminal session.
+pub const DEFAULT_OUTPUT_TAIL_BYTES: usize = 128 * 1024;
 
 /// Validated shell launch settings.
 #[derive(Debug, Clone)]
@@ -33,6 +35,8 @@ pub struct PtySessionConfig {
     pub rows: u16,
     /// Initial columns.
     pub cols: u16,
+    /// Maximum recent output bytes retained for renderer reattachment.
+    pub output_tail_bytes: usize,
     /// Extra environment entries applied after the inherited environment.
     pub environment: Vec<(OsString, OsString)>,
 }
@@ -44,6 +48,7 @@ impl Default for PtySessionConfig {
             cwd: std::env::current_dir().unwrap_or_else(|_| PathBuf::from(".")),
             rows: 24,
             cols: 80,
+            output_tail_bytes: DEFAULT_OUTPUT_TAIL_BYTES,
             environment: Vec::new(),
         }
     }
@@ -135,6 +140,10 @@ impl PtySession {
         if config.rows == 0 || config.cols == 0 {
             return Err(PtyError::InvalidSize);
         }
+        if config.output_tail_bytes == 0 {
+            return Err(PtyError::InvalidOutputTail);
+        }
+        let output_tail_bytes = config.output_tail_bytes;
         let shell = resolve_shell(config.shell.as_deref())?;
         let cwd = validate_working_directory(&config.cwd)?;
         let stream_id = hub.create_session()?;
@@ -197,7 +206,7 @@ impl PtySession {
 
         let exit = Arc::new((Mutex::new(None), Condvar::new()));
         let reader_gate = Arc::new((Mutex::new(!defer_reader), Condvar::new()));
-        let output_tail = Arc::new(Mutex::new(VecDeque::with_capacity(OUTPUT_TAIL_BYTES)));
+        let output_tail = Arc::new(Mutex::new(VecDeque::with_capacity(output_tail_bytes)));
         let reader_hub = Arc::clone(&hub);
         let reader_tail = Arc::clone(&output_tail);
         let reader_gate_thread = Arc::clone(&reader_gate);
@@ -221,8 +230,8 @@ impl PtySession {
                             let chunk = &buffer[..count];
                             if let Ok(mut tail) = reader_tail.lock() {
                                 tail.extend(chunk.iter().copied());
-                                if tail.len() > OUTPUT_TAIL_BYTES {
-                                    let excess = tail.len() - OUTPUT_TAIL_BYTES;
+                                if tail.len() > output_tail_bytes {
+                                    let excess = tail.len() - output_tail_bytes;
                                     tail.drain(..excess);
                                 }
                             }
@@ -458,6 +467,9 @@ pub enum PtyError {
     /// Rows or columns were zero.
     #[error("terminal size must have positive rows and columns")]
     InvalidSize,
+    /// The retained output bound was zero.
+    #[error("terminal output tail must be positive")]
+    InvalidOutputTail,
 }
 
 #[cfg(test)]
