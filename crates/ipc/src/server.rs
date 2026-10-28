@@ -44,8 +44,9 @@ use tracing::warn;
 use crate::{
     HOST_STATUS_METHOD, HostStatusRequest, HostStatusResponse, IpcError, IpcResponse,
     PROJECT_LIST_METHOD, PROJECT_REGISTER_METHOD, PROJECT_REMOVE_METHOD, ProjectStore,
+    TASK_AUDIT_METHOD, TASK_CREATE_METHOD, TASK_LIST_METHOD, TASK_UPDATE_METHOD,
     TERMINAL_ATTACH_METHOD, TERMINAL_CLOSE_METHOD, TERMINAL_INPUT_METHOD, TERMINAL_RESIZE_METHOD,
-    TERMINAL_SNAPSHOT_METHOD, TERMINAL_SPAWN_METHOD, WORKSPACE_LAYOUT_GET_METHOD,
+    TERMINAL_SNAPSHOT_METHOD, TERMINAL_SPAWN_METHOD, TaskStore, WORKSPACE_LAYOUT_GET_METHOD,
     WORKSPACE_LAYOUT_SAVE_METHOD, WorkspaceLayoutStore, read_frame_until, write_frame_until,
 };
 
@@ -82,7 +83,7 @@ impl IpcServer {
     /// made owner-only after binding. On Windows the named pipe receives a
     /// security descriptor for the current user's SID.
     pub fn start(paths: &PlatformPaths, status: HostStatusResponse) -> Result<Self, IpcError> {
-        Self::start_inner(paths, status, None, None, None, IpcOptions::default())
+        Self::start_inner(paths, status, None, None, None, None, IpcOptions::default())
     }
 
     /// Bind the endpoint with explicit timeout settings.
@@ -91,7 +92,7 @@ impl IpcServer {
         status: HostStatusResponse,
         options: IpcOptions,
     ) -> Result<Self, IpcError> {
-        Self::start_inner(paths, status, None, None, None, options)
+        Self::start_inner(paths, status, None, None, None, None, options)
     }
 
     /// Bind the endpoint and enable terminal stream attachments.
@@ -104,6 +105,7 @@ impl IpcServer {
             paths,
             status,
             Some(Arc::new(TerminalService::new(terminal))),
+            None,
             None,
             None,
             IpcOptions::default(),
@@ -123,6 +125,7 @@ impl IpcServer {
             Some(Arc::new(TerminalService::new(terminal))),
             None,
             None,
+            None,
             options,
         )
     }
@@ -139,6 +142,7 @@ impl IpcServer {
             Some(terminal),
             None,
             None,
+            None,
             IpcOptions::default(),
         )
     }
@@ -150,7 +154,7 @@ impl IpcServer {
         terminal: Arc<TerminalService>,
         options: IpcOptions,
     ) -> Result<Self, IpcError> {
-        Self::start_inner(paths, status, Some(terminal), None, None, options)
+        Self::start_inner(paths, status, Some(terminal), None, None, None, options)
     }
 
     /// Bind the endpoint with terminal and workspace persistence stores.
@@ -166,6 +170,24 @@ impl IpcServer {
             Some(terminal),
             Some(layout_store),
             None,
+            None,
+            IpcOptions::default(),
+        )
+    }
+
+    /// Bind the endpoint with task persistence only.
+    pub fn start_with_task_store(
+        paths: &PlatformPaths,
+        status: HostStatusResponse,
+        task_store: Arc<dyn TaskStore>,
+    ) -> Result<Self, IpcError> {
+        Self::start_inner(
+            paths,
+            status,
+            None,
+            None,
+            None,
+            Some(task_store),
             IpcOptions::default(),
         )
     }
@@ -182,6 +204,7 @@ impl IpcServer {
             None,
             None,
             Some(project_store),
+            None,
             IpcOptions::default(),
         )
     }
@@ -193,6 +216,7 @@ impl IpcServer {
         terminal: Arc<TerminalService>,
         layout_store: Arc<dyn WorkspaceLayoutStore>,
         project_store: Arc<dyn ProjectStore>,
+        task_store: Arc<dyn TaskStore>,
     ) -> Result<Self, IpcError> {
         Self::start_inner(
             paths,
@@ -200,6 +224,7 @@ impl IpcServer {
             Some(terminal),
             Some(layout_store),
             Some(project_store),
+            Some(task_store),
             IpcOptions::default(),
         )
     }
@@ -210,6 +235,7 @@ impl IpcServer {
         terminal: Option<Arc<TerminalService>>,
         layout_store: Option<Arc<dyn WorkspaceLayoutStore>>,
         project_store: Option<Arc<dyn ProjectStore>>,
+        task_store: Option<Arc<dyn TaskStore>>,
         options: IpcOptions,
     ) -> Result<Self, IpcError> {
         #[cfg(windows)]
@@ -227,6 +253,7 @@ impl IpcServer {
         let accept_terminal = terminal;
         let accept_layout = layout_store;
         let accept_project = project_store;
+        let accept_task = task_store;
         let accept_thread = thread::Builder::new()
             .name("muxyard-ipc-accept".to_string())
             .spawn(move || {
@@ -238,6 +265,7 @@ impl IpcServer {
                     accept_terminal,
                     accept_layout,
                     accept_project,
+                    accept_task,
                     options,
                 );
             })
@@ -298,6 +326,7 @@ fn accept_loop(
     terminal: Option<Arc<TerminalService>>,
     layout_store: Option<Arc<dyn WorkspaceLayoutStore>>,
     project_store: Option<Arc<dyn ProjectStore>>,
+    task_store: Option<Arc<dyn TaskStore>>,
     options: IpcOptions,
 ) {
     while !stop.load(Ordering::SeqCst) {
@@ -308,6 +337,7 @@ fn accept_loop(
                 let connection_terminal = terminal.clone();
                 let connection_layout = layout_store.clone();
                 let connection_project = project_store.clone();
+                let connection_task = task_store.clone();
                 match thread::Builder::new()
                     .name("muxyard-ipc-connection".to_string())
                     .spawn(move || {
@@ -317,6 +347,7 @@ fn accept_loop(
                             connection_terminal.as_deref(),
                             connection_layout.as_deref(),
                             connection_project.as_deref(),
+                            connection_task.as_deref(),
                             connection_stop.as_ref(),
                             options,
                         ) {
@@ -343,12 +374,14 @@ fn accept_loop(
     }
 }
 
+#[allow(clippy::too_many_arguments)]
 fn handle_connection(
     mut stream: LocalSocketStream,
     status: &HostStatusResponse,
     terminal: Option<&TerminalService>,
     layout_store: Option<&dyn WorkspaceLayoutStore>,
     project_store: Option<&dyn ProjectStore>,
+    task_store: Option<&dyn TaskStore>,
     stop: &AtomicBool,
     options: IpcOptions,
 ) -> Result<(), IpcError> {
@@ -372,6 +405,7 @@ fn handle_connection(
             terminal,
             layout_store,
             project_store,
+            task_store,
             options.request_timeout,
         )? {
             FrameAction::Continue => {}
@@ -389,6 +423,7 @@ enum FrameAction {
     Terminal(TerminalSubscription),
 }
 
+#[allow(clippy::too_many_arguments)]
 fn handle_frame(
     stream: &mut LocalSocketStream,
     frame: &[u8],
@@ -396,6 +431,7 @@ fn handle_frame(
     terminal: Option<&TerminalService>,
     layout_store: Option<&dyn WorkspaceLayoutStore>,
     project_store: Option<&dyn ProjectStore>,
+    task_store: Option<&dyn TaskStore>,
     timeout: Duration,
 ) -> Result<FrameAction, IpcError> {
     let request = match decode_control::<Value>(frame) {
@@ -581,13 +617,205 @@ fn handle_frame(
                     IpcResponse::ok(muxyard_contracts::ProjectRemoveResponse { removed }),
                     timeout,
                 )?,
+                Err(message) => write_error(
+                    stream,
+                    request.id,
+                    request.method,
+                    ApiError {
+                        code: ErrorCode::Conflict,
+                        message,
+                    },
+                    timeout,
+                )?,
+            }
+        }
+        TASK_LIST_METHOD => {
+            let Some(task_store) = task_store else {
+                write_error(
+                    stream,
+                    request.id,
+                    request.method,
+                    ApiError {
+                        code: ErrorCode::UnsupportedCapability,
+                        message: "Task persistence is not available on this host.".to_string(),
+                    },
+                    timeout,
+                )?;
+                return Ok(FrameAction::Continue);
+            };
+            let list: muxyard_contracts::TaskListRequest =
+                match serde_json::from_value(request.data) {
+                    Ok(list) => list,
+                    Err(_) => {
+                        write_error(
+                            stream,
+                            request.id,
+                            request.method,
+                            invalid_request("The task.list request body is invalid."),
+                            timeout,
+                        )?;
+                        return Ok(FrameAction::Continue);
+                    }
+                };
+            match task_store.list_tasks(&list) {
+                Ok(tasks) => write_response(
+                    stream,
+                    request.id,
+                    request.method,
+                    IpcResponse::ok(muxyard_contracts::TaskListResponse { tasks }),
+                    timeout,
+                )?,
                 Err(_) => write_error(
                     stream,
                     request.id,
                     request.method,
                     ApiError {
                         code: ErrorCode::Internal,
-                        message: "The project could not be removed.".to_string(),
+                        message: "Tasks could not be loaded.".to_string(),
+                    },
+                    timeout,
+                )?,
+            }
+        }
+        TASK_CREATE_METHOD => {
+            let Some(task_store) = task_store else {
+                write_error(
+                    stream,
+                    request.id,
+                    request.method,
+                    ApiError {
+                        code: ErrorCode::UnsupportedCapability,
+                        message: "Task persistence is not available on this host.".to_string(),
+                    },
+                    timeout,
+                )?;
+                return Ok(FrameAction::Continue);
+            };
+            let create: muxyard_contracts::TaskCreateRequest =
+                match serde_json::from_value(request.data) {
+                    Ok(create) => create,
+                    Err(_) => {
+                        write_error(
+                            stream,
+                            request.id,
+                            request.method,
+                            invalid_request("The task.create request body is invalid."),
+                            timeout,
+                        )?;
+                        return Ok(FrameAction::Continue);
+                    }
+                };
+            match task_store.create_task(&create) {
+                Ok(task) => write_response(
+                    stream,
+                    request.id,
+                    request.method,
+                    IpcResponse::ok(task),
+                    timeout,
+                )?,
+                Err(_) => write_error(
+                    stream,
+                    request.id,
+                    request.method,
+                    ApiError {
+                        code: ErrorCode::InvalidRequest,
+                        message: "The task could not be created.".to_string(),
+                    },
+                    timeout,
+                )?,
+            }
+        }
+        TASK_UPDATE_METHOD => {
+            let Some(task_store) = task_store else {
+                write_error(
+                    stream,
+                    request.id,
+                    request.method,
+                    ApiError {
+                        code: ErrorCode::UnsupportedCapability,
+                        message: "Task persistence is not available on this host.".to_string(),
+                    },
+                    timeout,
+                )?;
+                return Ok(FrameAction::Continue);
+            };
+            let update: muxyard_contracts::TaskUpdateRequest =
+                match serde_json::from_value(request.data) {
+                    Ok(update) => update,
+                    Err(_) => {
+                        write_error(
+                            stream,
+                            request.id,
+                            request.method,
+                            invalid_request("The task.update request body is invalid."),
+                            timeout,
+                        )?;
+                        return Ok(FrameAction::Continue);
+                    }
+                };
+            match task_store.update_task(&update) {
+                Ok(task) => write_response(
+                    stream,
+                    request.id,
+                    request.method,
+                    IpcResponse::ok(task),
+                    timeout,
+                )?,
+                Err(_) => write_error(
+                    stream,
+                    request.id,
+                    request.method,
+                    ApiError {
+                        code: ErrorCode::Conflict,
+                        message: "The task could not be updated; refresh and retry.".to_string(),
+                    },
+                    timeout,
+                )?,
+            }
+        }
+        TASK_AUDIT_METHOD => {
+            let Some(task_store) = task_store else {
+                write_error(
+                    stream,
+                    request.id,
+                    request.method,
+                    ApiError {
+                        code: ErrorCode::UnsupportedCapability,
+                        message: "Task persistence is not available on this host.".to_string(),
+                    },
+                    timeout,
+                )?;
+                return Ok(FrameAction::Continue);
+            };
+            let audit: muxyard_contracts::TaskAuditRequest =
+                match serde_json::from_value(request.data) {
+                    Ok(audit) => audit,
+                    Err(_) => {
+                        write_error(
+                            stream,
+                            request.id,
+                            request.method,
+                            invalid_request("The task.audit request body is invalid."),
+                            timeout,
+                        )?;
+                        return Ok(FrameAction::Continue);
+                    }
+                };
+            match task_store.task_audit(&audit.task_id.0) {
+                Ok(events) => write_response(
+                    stream,
+                    request.id,
+                    request.method,
+                    IpcResponse::ok(muxyard_contracts::TaskAuditResponse { events }),
+                    timeout,
+                )?,
+                Err(_) => write_error(
+                    stream,
+                    request.id,
+                    request.method,
+                    ApiError {
+                        code: ErrorCode::InvalidRequest,
+                        message: "Task audit could not be loaded.".to_string(),
                     },
                     timeout,
                 )?,

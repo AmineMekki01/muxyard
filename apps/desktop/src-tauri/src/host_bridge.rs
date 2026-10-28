@@ -15,14 +15,16 @@ use std::{
 use muxyard_contracts::{
     ApiError, ErrorCode, HostStatusEvent, HostStatusResponse, PROTOCOL_VERSION, Project,
     ProjectListRequest, ProjectListResponse, ProjectRegisterRequest, ProjectRemoveRequest,
-    ProjectRemoveResponse, TerminalCloseRequest, TerminalInputRequest, TerminalResizeRequest,
-    TerminalSnapshotRequest, TerminalSnapshotResponse, TerminalSpawnRequest, TerminalSpawnResponse,
-    WorkspaceLayout, WorkspaceLayoutGetRequest, WorkspaceLayoutSaveRequest,
-    WorkspaceLayoutSnapshot,
+    ProjectRemoveResponse, Task, TaskAuditRequest, TaskAuditResponse, TaskCreateRequest,
+    TaskListRequest, TaskListResponse, TaskUpdateRequest, TerminalCloseRequest,
+    TerminalInputRequest, TerminalResizeRequest, TerminalSnapshotRequest, TerminalSnapshotResponse,
+    TerminalSpawnRequest, TerminalSpawnResponse, WorkspaceLayout, WorkspaceLayoutGetRequest,
+    WorkspaceLayoutSaveRequest, WorkspaceLayoutSnapshot,
 };
 use muxyard_ipc::{
     IpcClient, IpcError, IpcResponse, PROJECT_LIST_METHOD, PROJECT_REGISTER_METHOD,
-    PROJECT_REMOVE_METHOD, TerminalStream,
+    PROJECT_REMOVE_METHOD, TASK_AUDIT_METHOD, TASK_CREATE_METHOD, TASK_LIST_METHOD,
+    TASK_UPDATE_METHOD, TerminalStream,
 };
 use muxyard_platform::PlatformPaths;
 use serde::{Serialize, de::DeserializeOwned};
@@ -178,6 +180,25 @@ impl HostBridge {
         request: ProjectRemoveRequest,
     ) -> Result<ProjectRemoveResponse, ApiError> {
         self.request(PROJECT_REMOVE_METHOD, request)
+    }
+
+    pub(crate) fn task_list(&self, request: TaskListRequest) -> Result<TaskListResponse, ApiError> {
+        self.request(TASK_LIST_METHOD, request)
+    }
+
+    pub(crate) fn task_create(&self, request: TaskCreateRequest) -> Result<Task, ApiError> {
+        self.request(TASK_CREATE_METHOD, request)
+    }
+
+    pub(crate) fn task_update(&self, request: TaskUpdateRequest) -> Result<Task, ApiError> {
+        self.request(TASK_UPDATE_METHOD, request)
+    }
+
+    pub(crate) fn task_audit(
+        &self,
+        request: TaskAuditRequest,
+    ) -> Result<TaskAuditResponse, ApiError> {
+        self.request(TASK_AUDIT_METHOD, request)
     }
 
     pub(crate) fn terminal_spawn(
@@ -755,6 +776,7 @@ mod tests {
                 ),
                 shell: Some("/bin/sh".to_string()),
                 history_id: None,
+                project_id: None,
                 rows: 24,
                 cols: 80,
             })

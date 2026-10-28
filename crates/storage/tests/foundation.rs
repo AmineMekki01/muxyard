@@ -588,6 +588,7 @@ fn workspace_layout_and_terminal_session_metadata_roundtrip() {
     record_terminal_session(
         connection,
         "session-1",
+        None,
         "host-1",
         "native-mac",
         "/tmp",

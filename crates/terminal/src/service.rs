@@ -133,6 +133,7 @@ impl TerminalService {
                 rows: request.rows,
                 cols: request.cols,
                 output_tail_bytes: self.output_tail_bytes,
+                project_id: request.project_id.map(|id| id.0),
                 environment,
             },
             Arc::clone(&self.hub),

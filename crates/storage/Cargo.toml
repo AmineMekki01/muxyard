@@ -6,9 +6,12 @@ rust-version.workspace = true
 publish.workspace = true
 
 [dependencies]
+muxyard-contracts.workspace = true
 rusqlite.workspace = true
+serde_json.workspace = true
 sha2.workspace = true
 thiserror.workspace = true
+uuid.workspace = true
 
 [dev-dependencies]
 muxyard-contracts.workspace = true

@@ -11,15 +11,17 @@ use std::{
 #[cfg(unix)]
 use muxyard_contracts::{
     Id, Project, ProjectListRequest, ProjectListResponse, ProjectRegisterRequest,
-    ProjectRemoveRequest, ProjectRemoveResponse, ProjectTrust, TerminalCloseRequest,
-    TerminalInputRequest, TerminalLayoutNode, TerminalSpawnRequest, TerminalSpawnResponse,
-    TerminalTabLayout, WorkspaceLayout, WorkspaceLayoutGetRequest, WorkspaceLayoutSaveRequest,
-    WorkspaceLayoutSnapshot,
+    ProjectRemoveRequest, ProjectRemoveResponse, ProjectTrust, Task, TaskAuditRequest,
+    TaskAuditResponse, TaskCreateRequest, TaskListRequest, TaskListResponse, TaskState,
+    TaskUpdateRequest, TerminalCloseRequest, TerminalInputRequest, TerminalLayoutNode,
+    TerminalSpawnRequest, TerminalSpawnResponse, TerminalTabLayout, WorkspaceLayout,
+    WorkspaceLayoutGetRequest, WorkspaceLayoutSaveRequest, WorkspaceLayoutSnapshot,
 };
 use muxyard_ipc::IpcClient;
 #[cfg(unix)]
 use muxyard_ipc::{
     IpcResponse, PROJECT_LIST_METHOD, PROJECT_REGISTER_METHOD, PROJECT_REMOVE_METHOD,
+    TASK_AUDIT_METHOD, TASK_CREATE_METHOD, TASK_LIST_METHOD, TASK_UPDATE_METHOD,
     TERMINAL_CLOSE_METHOD, TERMINAL_INPUT_METHOD, TERMINAL_SPAWN_METHOD,
     WORKSPACE_LAYOUT_GET_METHOD, WORKSPACE_LAYOUT_SAVE_METHOD,
 };
@@ -613,6 +615,7 @@ fn local_host_terminal_control_roundtrip() {
                 cwd: Some(host.root.to_string_lossy().into_owned()),
                 shell: Some("/bin/sh".to_string()),
                 history_id: None,
+                project_id: None,
                 rows: 24,
                 cols: 80,
             },
@@ -728,6 +731,7 @@ fn host_layout_survives_restart_and_session_metadata_is_recorded() {
                 cwd: Some(host.root.to_string_lossy().into_owned()),
                 shell: Some("/bin/sh".to_string()),
                 history_id: Some(Id("pane-test".to_string())),
+                project_id: None,
                 rows: 24,
                 cols: 80,
             },
@@ -794,6 +798,7 @@ fn corrupt_workspace_layout_is_discarded_without_removing_session_records() {
                 cwd: Some(host.root.to_string_lossy().into_owned()),
                 shell: Some("/bin/sh".to_string()),
                 history_id: None,
+                project_id: None,
                 rows: 24,
                 cols: 80,
             },
@@ -954,5 +959,120 @@ fn project_registration_discovers_git_root_and_allows_plain_projects() {
     assert!(matches!(removed, IpcResponse::Ok { data } if data.removed));
 
     drop(client);
+    assert!(host.stop().status.success());
+}
+
+#[cfg(unix)]
+#[test]
+fn durable_task_roundtrip_through_host_ipc() {
+    let host = HostGuard::new();
+    assert!(host.start().status.success());
+    status_pid(&host);
+    let paths = PlatformPaths::from_root(&host.root);
+    let project_path = host.root.join("task-project");
+    fs::create_dir(&project_path).unwrap();
+
+    let mut client = IpcClient::connect(&paths).unwrap();
+    let project: IpcResponse<Project> = client
+        .request(
+            PROJECT_REGISTER_METHOD,
+            ProjectRegisterRequest {
+                path: project_path.to_string_lossy().into_owned(),
+                name: Some("Task project".to_string()),
+            },
+        )
+        .unwrap();
+    let project = match project {
+        IpcResponse::Ok { data } => data,
+        IpcResponse::Error { error } => panic!("project registration failed: {error}"),
+    };
+
+    let spawned: IpcResponse<TerminalSpawnResponse> = client
+        .request(
+            TERMINAL_SPAWN_METHOD,
+            TerminalSpawnRequest {
+                cwd: Some(project_path.to_string_lossy().into_owned()),
+                shell: Some("/bin/sh".to_string()),
+                history_id: None,
+                project_id: Some(project.id.clone()),
+                rows: 24,
+                cols: 80,
+            },
+        )
+        .unwrap();
+    assert!(matches!(spawned, IpcResponse::Ok { .. }));
+
+    let task: IpcResponse<Task> = client
+        .request(
+            TASK_CREATE_METHOD,
+            TaskCreateRequest {
+                project_id: project.id.clone(),
+                title: "Durable task".to_string(),
+                goal: "Verify host IPC".to_string(),
+                constraints: vec!["no unrelated changes".to_string()],
+                base_revision: None,
+            },
+        )
+        .unwrap();
+    let task = match task {
+        IpcResponse::Ok { data } => data,
+        IpcResponse::Error { error } => panic!("task creation failed: {error}"),
+    };
+    assert_eq!(task.state, TaskState::Draft);
+
+    let listed: IpcResponse<TaskListResponse> = client
+        .request(
+            TASK_LIST_METHOD,
+            TaskListRequest {
+                project_id: Some(project.id.clone()),
+            },
+        )
+        .unwrap();
+    assert!(matches!(listed, IpcResponse::Ok { data } if data.tasks.len() == 1));
+
+    let updated: IpcResponse<Task> = client
+        .request(
+            TASK_UPDATE_METHOD,
+            TaskUpdateRequest {
+                task_id: task.id.clone(),
+                expected_version: task.state_version,
+                title: None,
+                goal: None,
+                constraints: None,
+                state: Some(TaskState::Ready),
+            },
+        )
+        .unwrap();
+    assert!(matches!(updated, IpcResponse::Ok { data } if data.state == TaskState::Ready));
+
+    let audit: IpcResponse<TaskAuditResponse> = client
+        .request(TASK_AUDIT_METHOD, TaskAuditRequest { task_id: task.id })
+        .unwrap();
+    assert!(matches!(audit, IpcResponse::Ok { data } if data.events.len() == 1));
+
+    let removal: IpcResponse<ProjectRemoveResponse> = client
+        .request(
+            PROJECT_REMOVE_METHOD,
+            ProjectRemoveRequest {
+                id: project.id.clone(),
+            },
+        )
+        .unwrap();
+    match removal {
+        IpcResponse::Error { error } => assert!(error.message.contains("still has tasks")),
+        IpcResponse::Ok { .. } => panic!("project with tasks must not be removable"),
+    }
+
+    drop(client);
+    let database = Database::open(host.database_path()).unwrap();
+    let linked_project: Option<String> = database
+        .connection()
+        .query_row(
+            "SELECT project_id FROM terminal_sessions ORDER BY created_ms DESC LIMIT 1",
+            [],
+            |row| row.get(0),
+        )
+        .unwrap();
+    assert_eq!(linked_project.as_deref(), Some(project.id.0.as_str()));
     assert!(host.stop().status.success());
 }

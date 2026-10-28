@@ -40,9 +40,11 @@ impl TerminalSessionState {
 }
 
 /// Record one newly spawned terminal session.
+#[allow(clippy::too_many_arguments)]
 pub fn record_terminal_session(
     connection: &rusqlite::Connection,
     id: &str,
+    project_id: Option<&str>,
     host_instance_id: &str,
     execution_environment_id: &str,
     cwd: &str,
@@ -53,8 +55,9 @@ pub fn record_terminal_session(
         "INSERT INTO terminal_sessions (
             id, project_id, task_id, host_instance_id, execution_environment_id,
             cwd, shell_executable, state, created_ms, updated_ms, last_event_seq
-         ) VALUES (?1, NULL, NULL, ?2, ?3, ?4, ?5, 'running', ?6, ?6, 0)
+         ) VALUES (?1, ?2, NULL, ?3, ?4, ?5, ?6, 'running', ?7, ?7, 0)
          ON CONFLICT(id) DO UPDATE SET
+            project_id = excluded.project_id,
             host_instance_id = excluded.host_instance_id,
             execution_environment_id = excluded.execution_environment_id,
             cwd = excluded.cwd,
@@ -63,6 +66,7 @@ pub fn record_terminal_session(
             updated_ms = excluded.updated_ms",
         params![
             id,
+            project_id,
             host_instance_id,
             execution_environment_id,
             cwd,

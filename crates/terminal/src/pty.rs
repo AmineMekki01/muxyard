@@ -37,6 +37,8 @@ pub struct PtySessionConfig {
     pub cols: u16,
     /// Maximum recent output bytes retained for renderer reattachment.
     pub output_tail_bytes: usize,
+    /// Optional owning project.
+    pub project_id: Option<String>,
     /// Extra environment entries applied after the inherited environment.
     pub environment: Vec<(OsString, OsString)>,
 }
@@ -49,6 +51,7 @@ impl Default for PtySessionConfig {
             rows: 24,
             cols: 80,
             output_tail_bytes: DEFAULT_OUTPUT_TAIL_BYTES,
+            project_id: None,
             environment: Vec::new(),
         }
     }
@@ -73,6 +76,8 @@ pub struct PtySessionIdentity {
     pub shell: PathBuf,
     /// Canonicalized working directory.
     pub cwd: PathBuf,
+    /// Optional owning project.
+    pub project_id: Option<String>,
 }
 
 /// Portable exit status captured for a PTY child.
@@ -105,6 +110,7 @@ pub struct PtySession {
     stream_id: Uuid,
     shell: PathBuf,
     cwd: PathBuf,
+    project_id: Option<String>,
     master: Option<Box<dyn MasterPty + Send>>,
     writer: Option<Box<dyn Write + Send>>,
     killer: Box<dyn ChildKiller + Send + Sync>,
@@ -144,6 +150,7 @@ impl PtySession {
             return Err(PtyError::InvalidOutputTail);
         }
         let output_tail_bytes = config.output_tail_bytes;
+        let project_id = config.project_id;
         let shell = resolve_shell(config.shell.as_deref())?;
         let cwd = validate_working_directory(&config.cwd)?;
         let stream_id = hub.create_session()?;
@@ -274,6 +281,7 @@ impl PtySession {
             stream_id,
             shell,
             cwd,
+            project_id,
             master: Some(master),
             writer: Some(writer),
             killer,
@@ -299,6 +307,7 @@ impl PtySession {
             stream_id: self.stream_id,
             shell: self.shell.clone(),
             cwd: self.cwd.clone(),
+            project_id: self.project_id.clone(),
         }
     }
 

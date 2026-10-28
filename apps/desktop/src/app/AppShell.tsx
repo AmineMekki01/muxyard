@@ -2,8 +2,14 @@
 
 import { useEffect, useRef, useState } from "react";
 
-import type { Project } from "@muxyard/contracts";
+import type {
+  Project,
+  Task,
+  TaskAuditEvent,
+  TaskState,
+} from "@muxyard/contracts";
 
+import { isApiError } from "../ipc/host";
 import { useHostConnection } from "../ipc/useHostConnection";
 import { hostStatusDetail } from "../ipc/host";
 import {
@@ -12,6 +18,13 @@ import {
   removeProject,
 } from "../modules/projects/projects";
 import { ProjectSidebar } from "../modules/projects/ProjectSidebar";
+import { TaskSidebar } from "../modules/tasks/TaskSidebar";
+import {
+  auditTask,
+  createTask,
+  listTasks,
+  updateTask,
+} from "../modules/tasks/tasks";
 import {
   TerminalWorkspace,
   type TerminalWorkspaceHandle,
@@ -29,6 +42,12 @@ import { useFocusManager } from "./useFocusManager";
 
 const COMMANDS = createCommands();
 
+function errorMessage(reason: unknown, fallback: string): string {
+  if (isApiError(reason)) return reason.message;
+  if (reason instanceof Error) return reason.message;
+  return fallback;
+}
+
 export function AppShell() {
   const [paletteOpen, setPaletteOpen] = useState(false);
   const [helpOpen, setHelpOpen] = useState(false);
@@ -36,6 +55,11 @@ export function AppShell() {
   const [activeProjectId, setActiveProjectId] = useState<string | null>(null);
   const [projectBusy, setProjectBusy] = useState(false);
   const [projectError, setProjectError] = useState<string | null>(null);
+  const [tasks, setTasks] = useState<Task[]>([]);
+  const [taskBusy, setTaskBusy] = useState(false);
+  const [taskError, setTaskError] = useState<string | null>(null);
+  const [auditTaskId, setAuditTaskId] = useState<string | null>(null);
+  const [auditEvents, setAuditEvents] = useState<TaskAuditEvent[]>([]);
   const terminalRef = useRef<TerminalWorkspaceHandle>(null);
   const { state: hostState, reconnect } = useHostConnection();
   const activeProject =
@@ -89,9 +113,7 @@ export function AppShell() {
       .catch((reason: unknown) => {
         if (alive) {
           setProjectError(
-            reason instanceof Error
-              ? reason.message
-              : "Projects could not be loaded.",
+            errorMessage(reason, "Projects could not be loaded."),
           );
         }
       })
@@ -102,6 +124,32 @@ export function AppShell() {
       alive = false;
     };
   }, [hostState.kind]);
+
+  useEffect(() => {
+    if (hostState.kind !== "connected" || !activeProjectId) {
+      setTasks([]);
+      return;
+    }
+    let alive = true;
+    setTaskBusy(true);
+    void listTasks({ project_id: activeProjectId })
+      .then((response) => {
+        if (!alive) return;
+        setTasks(response.tasks);
+        setTaskError(null);
+      })
+      .catch((reason: unknown) => {
+        if (alive) {
+          setTaskError(errorMessage(reason, "Tasks could not be loaded."));
+        }
+      })
+      .finally(() => {
+        if (alive) setTaskBusy(false);
+      });
+    return () => {
+      alive = false;
+    };
+  }, [activeProjectId, hostState.kind]);
 
   const openProject = (project: Project) => {
     setActiveProjectId(project.id);
@@ -115,9 +163,7 @@ export function AppShell() {
       })
       .catch((reason: unknown) => {
         setProjectError(
-          reason instanceof Error
-            ? reason.message
-            : "The project could not be opened.",
+          errorMessage(reason, "The project could not be opened."),
         );
       });
   };
@@ -135,9 +181,7 @@ export function AppShell() {
       })
       .catch((reason: unknown) => {
         setProjectError(
-          reason instanceof Error
-            ? reason.message
-            : "The project directory could not be opened.",
+          errorMessage(reason, "The project directory could not be opened."),
         );
       })
       .finally(() => setProjectBusy(false));
@@ -157,12 +201,76 @@ export function AppShell() {
       })
       .catch((reason: unknown) => {
         setProjectError(
-          reason instanceof Error
-            ? reason.message
-            : "The project could not be removed.",
+          errorMessage(reason, "The project could not be removed."),
         );
       })
       .finally(() => setProjectBusy(false));
+  };
+
+  const addTask = (title: string, goal: string) => {
+    if (!activeProjectId) return;
+    setTaskBusy(true);
+    void createTask({
+      project_id: activeProjectId,
+      title,
+      goal,
+      constraints: [],
+      base_revision: null,
+    })
+      .then((task) => {
+        setTasks((current) => [task, ...current]);
+        setTaskError(null);
+      })
+      .catch((reason: unknown) => {
+        setTaskError(
+          reason instanceof Error
+            ? reason.message
+            : "The task could not be created.",
+        );
+      })
+      .finally(() => setTaskBusy(false));
+  };
+
+  const showTaskAudit = (task: Task) => {
+    if (auditTaskId === task.id) {
+      setAuditTaskId(null);
+      setAuditEvents([]);
+      return;
+    }
+    setAuditTaskId(task.id);
+    setAuditEvents([]);
+    void auditTask({ task_id: task.id })
+      .then((response) => setAuditEvents(response.events))
+      .catch((reason: unknown) => {
+        setTaskError(errorMessage(reason, "Task history could not be loaded."));
+      });
+  };
+
+  const transitionTask = (task: Task, state: TaskState) => {
+    setTaskBusy(true);
+    void updateTask({
+      task_id: task.id,
+      expected_version: task.state_version,
+      title: null,
+      goal: null,
+      constraints: null,
+      state,
+    })
+      .then((updated) => {
+        setTasks((current) =>
+          current.map((item) => (item.id === updated.id ? updated : item)),
+        );
+        setTaskError(null);
+      })
+      .catch((reason: unknown) => {
+        setTaskError(
+          errorMessage(
+            reason,
+            "The task could not be updated; refresh and retry.",
+          ),
+        );
+      })
+      .finally(() => setTaskBusy(false));
   };
 
   useEffect(() => {
@@ -265,10 +373,17 @@ export function AppShell() {
                 onRegister={addProject}
                 onRemove={forgetProject}
               />
-              <section className="sidebar-section">
-                <h3>Tasks</h3>
-                <p>No tasks yet.</p>
-              </section>
+              <TaskSidebar
+                tasks={tasks}
+                projectSelected={Boolean(activeProjectId)}
+                busy={taskBusy}
+                error={taskError}
+                onCreate={addTask}
+                onTransition={transitionTask}
+                onAudit={showTaskAudit}
+                auditTaskId={auditTaskId}
+                auditEvents={auditEvents}
+              />
               <section className="sidebar-section">
                 <h3>Sessions</h3>
                 <p>No sessions yet.</p>
@@ -310,6 +425,8 @@ export function AppShell() {
             <TerminalWorkspace
               ref={terminalRef}
               shortcutsEnabled={!paletteOpen && !helpOpen}
+              projectId={activeProjectId}
+              projectCwd={activeProject?.root_path ?? null}
             />
           ) : (
             <div className="empty-content">

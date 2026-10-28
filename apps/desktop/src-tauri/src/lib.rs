@@ -7,9 +7,9 @@ use tauri::Manager;
 
 pub use commands::{
     host_connect, host_status, host_unwatch, host_watch, project_list, project_register,
-    project_remove, terminal_attach, terminal_close, terminal_input, terminal_render_config,
-    terminal_resize, terminal_snapshot, terminal_spawn, workspace_layout_get,
-    workspace_layout_save,
+    project_remove, task_audit, task_create, task_list, task_update, terminal_attach,
+    terminal_close, terminal_input, terminal_render_config, terminal_resize, terminal_snapshot,
+    terminal_spawn, workspace_layout_get, workspace_layout_save,
 };
 
 /// Open the workspace window and register the typed local host bridge.
@@ -31,6 +31,10 @@ pub fn run() -> tauri::Result<()> {
             project_list,
             project_register,
             project_remove,
+            task_list,
+            task_create,
+            task_update,
+            task_audit,
             terminal_render_config,
             terminal_spawn,
             terminal_snapshot,

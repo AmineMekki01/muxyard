@@ -190,6 +190,184 @@ export type ProjectRemoveResponse = {
   removed: boolean;
 };
 
+export type Task = {
+  /**
+   * Stable task ID.
+   */
+  id: Id;
+  /**
+   * Owning project.
+   */
+  project_id: Id;
+  /**
+   * Short task title.
+   */
+  title: string;
+  /**
+   * Task goal.
+   */
+  goal: string;
+  /**
+   * User-supplied constraints.
+   */
+  constraints: Array<string>;
+  /**
+   * Current lifecycle state.
+   */
+  state: TaskState;
+  /**
+   * Optional worktree identity.
+   */
+  worktree_id: Id | null;
+  /**
+   * Optional base revision.
+   */
+  base_revision: string | null;
+  /**
+   * Creation time in Unix epoch milliseconds.
+   */
+  created_ms: bigint;
+  /**
+   * Last update time in Unix epoch milliseconds.
+   */
+  updated_ms: bigint;
+  /**
+   * Optimistic concurrency version.
+   */
+  state_version: bigint;
+};
+
+export type TaskCreateRequest = {
+  /**
+   * Owning project.
+   */
+  project_id: Id;
+  /**
+   * Short task title.
+   */
+  title: string;
+  /**
+   * Task goal.
+   */
+  goal: string;
+  /**
+   * User-supplied constraints.
+   */
+  constraints: Array<string>;
+  /**
+   * Optional base revision.
+   */
+  base_revision: string | null;
+};
+
+export type TaskListRequest = {
+  /**
+   * Optional project filter.
+   */
+  project_id: Id | null;
+};
+
+export type TaskListResponse = {
+  /**
+   * Tasks ordered by most recent update.
+   */
+  tasks: Array<Task>;
+};
+
+export type TaskUpdateRequest = {
+  /**
+   * Target task.
+   */
+  task_id: Id;
+  /**
+   * Version the caller last observed.
+   */
+  expected_version: bigint;
+  /**
+   * Optional title replacement.
+   */
+  title: string | null;
+  /**
+   * Optional goal replacement.
+   */
+  goal: string | null;
+  /**
+   * Optional constraints replacement.
+   */
+  constraints: Array<string> | null;
+  /**
+   * Optional lifecycle transition.
+   */
+  state: TaskState | null;
+};
+
+export type TaskAuditEvent = {
+  /**
+   * Stable event ID.
+   */
+  id: Id;
+  /**
+   * Task that changed.
+   */
+  task_id: Id;
+  /**
+   * Previous state.
+   */
+  from_state: TaskState;
+  /**
+   * New state.
+   */
+  to_state: TaskState;
+  /**
+   * Actor that requested the transition.
+   */
+  actor: string;
+  /**
+   * Event time in Unix epoch milliseconds.
+   */
+  created_ms: bigint;
+};
+
+export type TaskAuditRequest = {
+  /**
+   * Target task.
+   */
+  task_id: Id;
+};
+
+export type TaskAuditResponse = {
+  /**
+   * Audit events, newest first.
+   */
+  events: Array<TaskAuditEvent>;
+};
+
+export type TaskLinkAgentRequest = {
+  /**
+   * Target task.
+   */
+  task_id: Id;
+  /**
+   * Agent session.
+   */
+  agent_session_id: Id;
+  /**
+   * Task role.
+   */
+  role: string;
+};
+
+export type TaskLinkSessionRequest = {
+  /**
+   * Target task.
+   */
+  task_id: Id;
+  /**
+   * Terminal session.
+   */
+  terminal_session_id: Id;
+};
+
 export type TerminalSpawnRequest = {
   /**
    * Working directory; omitted means the host process directory.
@@ -203,6 +381,10 @@ export type TerminalSpawnRequest = {
    * Stable per-pane history identity; the host maps it to a private HISTFILE.
    */
   history_id: Id | null;
+  /**
+   * Owning project, when the terminal is opened in a project workspace.
+   */
+  project_id: Id | null;
   /**
    * Initial rows.
    */

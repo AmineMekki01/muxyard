@@ -47,6 +47,17 @@ CREATE TABLE tasks (
 
 CREATE INDEX idx_tasks_project_state ON tasks(project_id, state, updated_ms DESC);
 
+CREATE TABLE task_audit_events (
+    id TEXT PRIMARY KEY,
+    task_id TEXT NOT NULL REFERENCES tasks(id) ON DELETE CASCADE,
+    from_state TEXT NOT NULL,
+    to_state TEXT NOT NULL,
+    actor TEXT NOT NULL,
+    created_ms INTEGER NOT NULL
+);
+
+CREATE INDEX idx_task_audit_task ON task_audit_events(task_id, created_ms DESC);
+
 CREATE TABLE terminal_sessions (
     id TEXT PRIMARY KEY,
     project_id TEXT REFERENCES projects(id),
@@ -79,6 +90,22 @@ CREATE TABLE agent_sessions (
 );
 
 CREATE INDEX idx_agents_task ON agent_sessions(task_id, updated_ms DESC);
+
+CREATE TABLE task_agents (
+    task_id TEXT NOT NULL REFERENCES tasks(id) ON DELETE CASCADE,
+    agent_session_id TEXT NOT NULL REFERENCES agent_sessions(id) ON DELETE CASCADE,
+    role TEXT NOT NULL,
+    linked_ms INTEGER NOT NULL,
+    PRIMARY KEY (task_id, agent_session_id)
+);
+
+CREATE TABLE task_sessions (
+    task_id TEXT NOT NULL REFERENCES tasks(id) ON DELETE CASCADE,
+    terminal_session_id TEXT NOT NULL REFERENCES terminal_sessions(id) ON DELETE CASCADE,
+    linked_ms INTEGER NOT NULL,
+    PRIMARY KEY (task_id, terminal_session_id)
+);
+
 CREATE TABLE workspace_layouts (
     id TEXT PRIMARY KEY,
     structure_json TEXT NOT NULL,

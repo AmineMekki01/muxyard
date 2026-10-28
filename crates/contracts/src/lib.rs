@@ -8,6 +8,7 @@ mod errors;
 mod host;
 mod models;
 mod projects;
+mod tasks;
 mod terminal;
 mod workspace;
 
@@ -18,6 +19,11 @@ pub use models::{AgentStatus, ExecutionEnvironment, Id, TaskState};
 pub use projects::{
     Project, ProjectListRequest, ProjectListResponse, ProjectRegisterRequest, ProjectRemoveRequest,
     ProjectRemoveResponse, ProjectTrust,
+};
+pub use tasks::{
+    Task, TaskAuditEvent, TaskAuditRequest, TaskAuditResponse, TaskCreateRequest,
+    TaskLinkAgentRequest, TaskLinkSessionRequest, TaskListRequest, TaskListResponse,
+    TaskUpdateRequest,
 };
 pub use terminal::{
     TerminalCloseRequest, TerminalInputRequest, TerminalRenderConfig, TerminalResizeRequest,

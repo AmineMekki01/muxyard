@@ -7,15 +7,16 @@ use std::{
 
 use muxyard_contracts::{
     ExecutionEnvironment, Id, MAX_WORKSPACE_LAYOUT_BYTES, Project, ProjectListRequest,
-    ProjectRegisterRequest, ProjectRemoveRequest, ProjectTrust, TerminalLayoutNode,
-    WorkspaceLayout, WorkspaceLayoutSnapshot,
+    ProjectRegisterRequest, ProjectRemoveRequest, ProjectTrust, Task, TaskAuditEvent,
+    TaskCreateRequest, TaskListRequest, TaskUpdateRequest, TerminalLayoutNode, WorkspaceLayout,
+    WorkspaceLayoutSnapshot,
 };
 use muxyard_git::discover_repository;
-use muxyard_ipc::{ProjectStore, WorkspaceLayoutStore};
+use muxyard_ipc::{ProjectStore, TaskStore, WorkspaceLayoutStore};
 use muxyard_storage::{
     Database, ProjectTrust as StoredProjectTrust, TerminalSessionState, delete_workspace_layout,
-    get_workspace_layout, list_projects, record_terminal_session, register_project, remove_project,
-    save_workspace_layout, update_terminal_session_state,
+    get_workspace_layout, list_projects, list_tasks, record_terminal_session, register_project,
+    remove_project, save_workspace_layout, update_terminal_session_state,
 };
 use muxyard_terminal::{PtySessionIdentity, TerminalSessionStore, TerminalStoreError};
 
@@ -57,6 +58,7 @@ impl TerminalSessionStore for HostStore {
         record_terminal_session(
             database.connection(),
             &identity.stream_id.to_string(),
+            identity.project_id.as_deref(),
             &self.host_instance_id,
             self.execution_environment_id,
             &identity.cwd.to_string_lossy(),
@@ -153,7 +155,72 @@ impl ProjectStore for HostStore {
 
     fn remove_project(&self, request: &ProjectRemoveRequest) -> Result<bool, String> {
         let database = self.database();
-        remove_project(database.connection(), &request.id.0).map_err(|error| error.to_string())
+        let task_count: i64 = database
+            .connection()
+            .query_row(
+                "SELECT COUNT(*) FROM tasks WHERE project_id = ?1",
+                [&request.id.0],
+                |row| row.get(0),
+            )
+            .map_err(|_| "The project could not be removed.".to_string())?;
+        if task_count > 0 {
+            return Err(
+                "This project still has tasks. Delete or move its tasks before removing the project."
+                    .to_string(),
+            );
+        }
+        remove_project(database.connection(), &request.id.0)
+            .map_err(|_| "The project could not be removed.".to_string())
+    }
+}
+
+impl TaskStore for HostStore {
+    fn list_tasks(&self, request: &TaskListRequest) -> Result<Vec<Task>, String> {
+        let database = self.database();
+        list_tasks(
+            database.connection(),
+            request.project_id.as_ref().map(|id| id.0.as_str()),
+        )
+        .map_err(|error| error.to_string())?
+        .into_iter()
+        .map(task_to_contract)
+        .collect()
+    }
+
+    fn create_task(&self, request: &TaskCreateRequest) -> Result<Task, String> {
+        let database = self.database();
+        let task = crate::store::create_task_record(
+            database.connection(),
+            &request.project_id.0,
+            &request.title,
+            &request.goal,
+            &request.constraints,
+            request.base_revision.as_deref(),
+            now_ms(),
+        )?;
+        task_to_contract(task)
+    }
+
+    fn update_task(&self, request: &TaskUpdateRequest) -> Result<Task, String> {
+        let database = self.database();
+        let task = crate::store::update_task_record(
+            database.connection(),
+            &request.task_id.0,
+            request.expected_version,
+            request.title.as_deref(),
+            request.goal.as_deref(),
+            request.constraints.as_deref(),
+            request.state,
+            "user",
+            now_ms(),
+        )?;
+        task_to_contract(task)
+    }
+
+    fn task_audit(&self, task_id: &str) -> Result<Vec<TaskAuditEvent>, String> {
+        let database = self.database();
+        crate::store::task_audit_records(database.connection(), task_id)
+            .map_err(|error| error.to_string())
     }
 }
 
@@ -283,6 +350,22 @@ fn validate_node(node: &TerminalLayoutNode, depth: usize, panes: &mut Vec<String
     }
 }
 
+fn task_to_contract(task: crate::store::StoredTaskRecord) -> Result<Task, String> {
+    Ok(Task {
+        id: Id(task.id),
+        project_id: Id(task.project_id),
+        title: task.title,
+        goal: task.goal,
+        constraints: task.constraints,
+        state: task.state,
+        worktree_id: task.worktree_id.map(Id),
+        base_revision: task.base_revision,
+        created_ms: task.created_ms,
+        updated_ms: task.updated_ms,
+        state_version: task.state_version,
+    })
+}
+
 fn execution_environment_from_id(id: &str) -> Result<ExecutionEnvironment, String> {
     match id {
         "native-mac" => Ok(ExecutionEnvironment::NativeMac {}),
@@ -309,4 +392,74 @@ fn execution_environment_id() -> &'static str {
     {
         "native-unknown"
     }
+}
+
+/// Re-export task records for the host store implementation.
+pub(crate) use muxyard_storage::StoredTask as StoredTaskRecord;
+
+pub(crate) fn create_task_record(
+    connection: &rusqlite::Connection,
+    project_id: &str,
+    title: &str,
+    goal: &str,
+    constraints: &[String],
+    base_revision: Option<&str>,
+    now_ms: i64,
+) -> Result<StoredTaskRecord, String> {
+    muxyard_storage::create_task(
+        connection,
+        &uuid::Uuid::new_v4().to_string(),
+        project_id,
+        title,
+        goal,
+        constraints,
+        base_revision,
+        now_ms,
+    )
+    .map_err(|error| error.to_string())
+}
+
+#[allow(clippy::too_many_arguments)]
+pub(crate) fn update_task_record(
+    connection: &rusqlite::Connection,
+    task_id: &str,
+    expected_version: i64,
+    title: Option<&str>,
+    goal: Option<&str>,
+    constraints: Option<&[String]>,
+    state: Option<muxyard_contracts::TaskState>,
+    actor: &str,
+    now_ms: i64,
+) -> Result<StoredTaskRecord, String> {
+    muxyard_storage::update_task(
+        connection,
+        task_id,
+        expected_version,
+        title,
+        goal,
+        constraints,
+        state,
+        actor,
+        now_ms,
+    )
+    .map_err(|error| error.to_string())
+}
+
+pub(crate) fn task_audit_records(
+    connection: &rusqlite::Connection,
+    task_id: &str,
+) -> Result<Vec<TaskAuditEvent>, String> {
+    let events = muxyard_storage::list_audit_events(connection, task_id)
+        .map_err(|error| error.to_string())?
+        .into_iter()
+        .map(|event| TaskAuditEvent {
+            id: Id(event.id),
+            task_id: Id(event.task_id),
+            from_state: event.from_state,
+            to_state: event.to_state,
+            actor: event.actor,
+            created_ms: event.created_ms,
+        })
+        .collect::<Vec<_>>();
+    Ok(events)
 }
