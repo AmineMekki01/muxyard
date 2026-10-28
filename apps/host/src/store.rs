@@ -6,12 +6,16 @@ use std::{
 };
 
 use muxyard_contracts::{
-    MAX_WORKSPACE_LAYOUT_BYTES, TerminalLayoutNode, WorkspaceLayout, WorkspaceLayoutSnapshot,
+    ExecutionEnvironment, Id, MAX_WORKSPACE_LAYOUT_BYTES, Project, ProjectListRequest,
+    ProjectRegisterRequest, ProjectRemoveRequest, ProjectTrust, TerminalLayoutNode,
+    WorkspaceLayout, WorkspaceLayoutSnapshot,
 };
-use muxyard_ipc::WorkspaceLayoutStore;
+use muxyard_git::discover_repository;
+use muxyard_ipc::{ProjectStore, WorkspaceLayoutStore};
 use muxyard_storage::{
-    Database, TerminalSessionState, delete_workspace_layout, get_workspace_layout,
-    record_terminal_session, save_workspace_layout, update_terminal_session_state,
+    Database, ProjectTrust as StoredProjectTrust, TerminalSessionState, delete_workspace_layout,
+    get_workspace_layout, list_projects, record_terminal_session, register_project, remove_project,
+    save_workspace_layout, update_terminal_session_state,
 };
 use muxyard_terminal::{PtySessionIdentity, TerminalSessionStore, TerminalStoreError};
 
@@ -77,6 +81,79 @@ impl TerminalSessionStore for HostStore {
         )
         .map(|_| ())
         .map_err(|error| TerminalStoreError(error.to_string()))
+    }
+}
+
+impl ProjectStore for HostStore {
+    fn list_projects(&self, _request: &ProjectListRequest) -> Result<Vec<Project>, String> {
+        let database = self.database();
+        list_projects(database.connection())
+            .map_err(|error| error.to_string())?
+            .into_iter()
+            .map(|project| {
+                Ok(Project {
+                    id: Id(project.id),
+                    name: project.name,
+                    root_path: project.root_path,
+                    execution_environment: execution_environment_from_id(
+                        &project.execution_environment_id,
+                    )?,
+                    repo_id: project.repo_id.map(Id),
+                    trust: match project.trust {
+                        StoredProjectTrust::Untrusted => ProjectTrust::Untrusted,
+                        StoredProjectTrust::Trusted => ProjectTrust::Trusted,
+                    },
+                    created_ms: project.created_ms,
+                    last_opened_ms: project.last_opened_ms,
+                })
+            })
+            .collect()
+    }
+
+    fn register_project(&self, request: &ProjectRegisterRequest) -> Result<Project, String> {
+        let discovery = discover_repository(&request.path).map_err(|error| error.to_string())?;
+        let name = request
+            .name
+            .as_deref()
+            .map(str::trim)
+            .filter(|name| !name.is_empty())
+            .map(str::to_string)
+            .or_else(|| {
+                discovery
+                    .root
+                    .file_name()
+                    .map(|name| name.to_string_lossy().into_owned())
+            })
+            .unwrap_or_else(|| "Project".to_string());
+        let database = self.database();
+        let stored = register_project(
+            database.connection(),
+            &uuid::Uuid::new_v4().to_string(),
+            &name,
+            &discovery.root.to_string_lossy(),
+            self.execution_environment_id,
+            None,
+            now_ms(),
+        )
+        .map_err(|error| error.to_string())?;
+        Ok(Project {
+            id: Id(stored.id),
+            name: stored.name,
+            root_path: stored.root_path,
+            execution_environment: execution_environment_from_id(&stored.execution_environment_id)?,
+            repo_id: stored.repo_id.map(Id),
+            trust: match stored.trust {
+                StoredProjectTrust::Untrusted => ProjectTrust::Untrusted,
+                StoredProjectTrust::Trusted => ProjectTrust::Trusted,
+            },
+            created_ms: stored.created_ms,
+            last_opened_ms: stored.last_opened_ms,
+        })
+    }
+
+    fn remove_project(&self, request: &ProjectRemoveRequest) -> Result<bool, String> {
+        let database = self.database();
+        remove_project(database.connection(), &request.id.0).map_err(|error| error.to_string())
     }
 }
 
@@ -203,6 +280,15 @@ fn validate_node(node: &TerminalLayoutNode, depth: usize, panes: &mut Vec<String
                 && validate_node(first, depth + 1, panes)
                 && validate_node(second, depth + 1, panes)
         }
+    }
+}
+
+fn execution_environment_from_id(id: &str) -> Result<ExecutionEnvironment, String> {
+    match id {
+        "native-mac" => Ok(ExecutionEnvironment::NativeMac {}),
+        "native-linux" => Ok(ExecutionEnvironment::NativeLinux {}),
+        "native-windows" => Ok(ExecutionEnvironment::NativeWindows {}),
+        _ => Err(format!("unsupported project execution environment: {id}")),
     }
 }
 

@@ -9,6 +9,7 @@ publish.workspace = true
 ctrlc.workspace = true
 muxyard-contracts.workspace = true
 muxyard-core.workspace = true
+muxyard-git.workspace = true
 muxyard-ipc.workspace = true
 muxyard-platform.workspace = true
 muxyard-storage.workspace = true

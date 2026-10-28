@@ -2,12 +2,13 @@
 
 use muxyard_contracts::{
     AgentStatus, ApiError, ControlEnvelope, ControlMessageType, ErrorCode, ExecutionEnvironment,
-    HostStatusEvent, HostStatusResponse, Id, MAX_CONTROL_BYTES, PROTOCOL_VERSION, ProtocolVersion,
-    TaskState, TerminalCloseRequest, TerminalInputRequest, TerminalLayoutNode,
-    TerminalRenderConfig, TerminalResizeRequest, TerminalSnapshotRequest, TerminalSnapshotResponse,
-    TerminalSpawnRequest, TerminalSpawnResponse, TerminalSplitDirection, TerminalTabLayout,
-    WorkspaceLayout, WorkspaceLayoutGetRequest, WorkspaceLayoutSaveRequest,
-    WorkspaceLayoutSnapshot,
+    HostStatusEvent, HostStatusResponse, Id, MAX_CONTROL_BYTES, PROTOCOL_VERSION, Project,
+    ProjectListRequest, ProjectListResponse, ProjectRegisterRequest, ProjectRemoveRequest,
+    ProjectRemoveResponse, ProjectTrust, ProtocolVersion, TaskState, TerminalCloseRequest,
+    TerminalInputRequest, TerminalLayoutNode, TerminalRenderConfig, TerminalResizeRequest,
+    TerminalSnapshotRequest, TerminalSnapshotResponse, TerminalSpawnRequest, TerminalSpawnResponse,
+    TerminalSplitDirection, TerminalTabLayout, WorkspaceLayout, WorkspaceLayoutGetRequest,
+    WorkspaceLayoutSaveRequest, WorkspaceLayoutSnapshot,
 };
 use ts_rs::{Config, TS};
 
@@ -26,6 +27,13 @@ fn main() {
         ApiError::decl(&config),
         HostStatusResponse::decl(&config),
         HostStatusEvent::decl(&config),
+        Project::decl(&config),
+        ProjectTrust::decl(&config),
+        ProjectListRequest::decl(&config),
+        ProjectListResponse::decl(&config),
+        ProjectRegisterRequest::decl(&config),
+        ProjectRemoveRequest::decl(&config),
+        ProjectRemoveResponse::decl(&config),
         TerminalSpawnRequest::decl(&config),
         TerminalSpawnResponse::decl(&config),
         TerminalRenderConfig::decl(&config),

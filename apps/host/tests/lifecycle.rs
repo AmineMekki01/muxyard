@@ -10,14 +10,17 @@ use std::{
 
 #[cfg(unix)]
 use muxyard_contracts::{
-    Id, TerminalCloseRequest, TerminalInputRequest, TerminalLayoutNode, TerminalSpawnRequest,
-    TerminalSpawnResponse, TerminalTabLayout, WorkspaceLayout, WorkspaceLayoutGetRequest,
-    WorkspaceLayoutSaveRequest, WorkspaceLayoutSnapshot,
+    Id, Project, ProjectListRequest, ProjectListResponse, ProjectRegisterRequest,
+    ProjectRemoveRequest, ProjectRemoveResponse, ProjectTrust, TerminalCloseRequest,
+    TerminalInputRequest, TerminalLayoutNode, TerminalSpawnRequest, TerminalSpawnResponse,
+    TerminalTabLayout, WorkspaceLayout, WorkspaceLayoutGetRequest, WorkspaceLayoutSaveRequest,
+    WorkspaceLayoutSnapshot,
 };
 use muxyard_ipc::IpcClient;
 #[cfg(unix)]
 use muxyard_ipc::{
-    IpcResponse, TERMINAL_CLOSE_METHOD, TERMINAL_INPUT_METHOD, TERMINAL_SPAWN_METHOD,
+    IpcResponse, PROJECT_LIST_METHOD, PROJECT_REGISTER_METHOD, PROJECT_REMOVE_METHOD,
+    TERMINAL_CLOSE_METHOD, TERMINAL_INPUT_METHOD, TERMINAL_SPAWN_METHOD,
     WORKSPACE_LAYOUT_GET_METHOD, WORKSPACE_LAYOUT_SAVE_METHOD,
 };
 use muxyard_platform::PlatformPaths;
@@ -873,5 +876,83 @@ fn stop_marker_for_another_instance_is_ignored() {
     thread::sleep(Duration::from_millis(500));
     let (_, status) = host.status_json();
     assert_eq!(status["pid"].as_u64().unwrap() as u32, pid);
+    assert!(host.stop().status.success());
+}
+
+#[cfg(unix)]
+#[test]
+fn project_registration_discovers_git_root_and_allows_plain_projects() {
+    let host = HostGuard::new();
+    assert!(host.start().status.success());
+    status_pid(&host);
+    let paths = PlatformPaths::from_root(&host.root);
+
+    let git_repo = host.root.join("git-project");
+    fs::create_dir(&git_repo).unwrap();
+    let git = Command::new("git")
+        .args(["init", "-q"])
+        .arg(&git_repo)
+        .status()
+        .unwrap();
+    assert!(git.success());
+    let nested = git_repo.join("nested");
+    fs::create_dir(&nested).unwrap();
+    let plain = host.root.join("plain-project");
+    fs::create_dir(&plain).unwrap();
+
+    let mut client = IpcClient::connect(&paths).unwrap();
+    let registered: IpcResponse<Project> = client
+        .request(
+            PROJECT_REGISTER_METHOD,
+            ProjectRegisterRequest {
+                path: nested.to_string_lossy().into_owned(),
+                name: None,
+            },
+        )
+        .unwrap();
+    let git_project = match registered {
+        IpcResponse::Ok { data } => data,
+        IpcResponse::Error { error } => panic!("git project registration failed: {error}"),
+    };
+    assert_eq!(
+        git_project.root_path,
+        git_repo.canonicalize().unwrap().to_string_lossy()
+    );
+    assert_eq!(git_project.trust, ProjectTrust::Untrusted);
+
+    let registered: IpcResponse<Project> = client
+        .request(
+            PROJECT_REGISTER_METHOD,
+            ProjectRegisterRequest {
+                path: plain.to_string_lossy().into_owned(),
+                name: Some("Plain".to_string()),
+            },
+        )
+        .unwrap();
+    let plain_project = match registered {
+        IpcResponse::Ok { data } => data,
+        IpcResponse::Error { error } => panic!("plain project registration failed: {error}"),
+    };
+    assert_eq!(plain_project.name, "Plain");
+
+    let listed: IpcResponse<ProjectListResponse> = client
+        .request(PROJECT_LIST_METHOD, ProjectListRequest {})
+        .unwrap();
+    match listed {
+        IpcResponse::Ok { data } => assert_eq!(data.projects.len(), 2),
+        IpcResponse::Error { error } => panic!("project list failed: {error}"),
+    }
+
+    let removed: IpcResponse<ProjectRemoveResponse> = client
+        .request(
+            PROJECT_REMOVE_METHOD,
+            ProjectRemoveRequest {
+                id: plain_project.id,
+            },
+        )
+        .unwrap();
+    assert!(matches!(removed, IpcResponse::Ok { data } if data.removed));
+
+    drop(client);
     assert!(host.stop().status.success());
 }

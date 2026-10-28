@@ -21,6 +21,8 @@ CREATE TABLE projects (
     root_path TEXT NOT NULL,
     execution_environment_id TEXT NOT NULL,
     repo_id TEXT,
+    trust_state TEXT NOT NULL DEFAULT 'untrusted'
+        CHECK (trust_state IN ('untrusted', 'trusted')),
     created_ms INTEGER NOT NULL,
     last_opened_ms INTEGER NOT NULL,
     UNIQUE (root_path, execution_environment_id)

@@ -13,7 +13,7 @@ use std::{
 };
 
 use muxyard_contracts::PROTOCOL_VERSION;
-use muxyard_ipc::{HostStatusResponse, IpcServer};
+use muxyard_ipc::{HostStatusResponse, IpcServer, ProjectStore, WorkspaceLayoutStore};
 use muxyard_platform::{
     ConfigStore, PlatformPaths, configure_detached, current_process_identity, ensure_private_dir,
     open_private_append, write_private_file,
@@ -149,7 +149,7 @@ impl HostRuntime {
                     .unwrap_or(DEFAULT_OUTPUT_TAIL_BYTES),
             ),
         );
-        let ipc = IpcServer::start_with_terminal_service_and_store(
+        let ipc = IpcServer::start_with_terminal_service_and_stores(
             &paths,
             HostStatusResponse {
                 host_version: env!("CARGO_PKG_VERSION").to_string(),
@@ -161,7 +161,8 @@ impl HostRuntime {
                 ready: true,
             },
             Arc::clone(&terminal),
-            store,
+            Arc::clone(&store) as Arc<dyn WorkspaceLayoutStore>,
+            Arc::clone(&store) as Arc<dyn ProjectStore>,
         )?;
         write_ready_marker(&paths.host_ready_path(), lock.info())?;
 

@@ -119,6 +119,77 @@ export type HostStatusEvent =
       error: ApiError;
     };
 
+export type Project = {
+  /**
+   * Stable project identifier.
+   */
+  id: Id;
+  /**
+   * Display name.
+   */
+  name: string;
+  /**
+   * Canonical project root.
+   */
+  root_path: string;
+  /**
+   * Execution environment that owns the path.
+   */
+  execution_environment: ExecutionEnvironment;
+  /**
+   * Optional repository identity.
+   */
+  repo_id: Id | null;
+  /**
+   * Workspace trust state.
+   */
+  trust: ProjectTrust;
+  /**
+   * Creation time in Unix epoch milliseconds.
+   */
+  created_ms: bigint;
+  /**
+   * Last open time in Unix epoch milliseconds.
+   */
+  last_opened_ms: bigint;
+};
+
+export type ProjectTrust = "untrusted" | "trusted";
+
+export type ProjectListRequest = Record<symbol, never>;
+
+export type ProjectListResponse = {
+  /**
+   * Projects ordered by last open time.
+   */
+  projects: Array<Project>;
+};
+
+export type ProjectRegisterRequest = {
+  /**
+   * Absolute directory path selected by the user.
+   */
+  path: string;
+  /**
+   * Optional display name; the directory name is used when omitted.
+   */
+  name: string | null;
+};
+
+export type ProjectRemoveRequest = {
+  /**
+   * Project identifier.
+   */
+  id: Id;
+};
+
+export type ProjectRemoveResponse = {
+  /**
+   * Whether a project row was removed.
+   */
+  removed: boolean;
+};
+
 export type TerminalSpawnRequest = {
   /**
    * Working directory; omitted means the host process directory.

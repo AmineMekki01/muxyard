@@ -9,9 +9,11 @@ use std::{
 };
 
 use muxyard_contracts::{
-    ApiError, HostStatusEvent, HostStatusResponse, TerminalCloseRequest, TerminalInputRequest,
-    TerminalRenderConfig, TerminalResizeRequest, TerminalSnapshotRequest, TerminalSnapshotResponse,
-    TerminalSpawnRequest, TerminalSpawnResponse, WorkspaceLayout, WorkspaceLayoutSnapshot,
+    ApiError, HostStatusEvent, HostStatusResponse, Project, ProjectListResponse,
+    ProjectRegisterRequest, ProjectRemoveRequest, ProjectRemoveResponse, TerminalCloseRequest,
+    TerminalInputRequest, TerminalRenderConfig, TerminalResizeRequest, TerminalSnapshotRequest,
+    TerminalSnapshotResponse, TerminalSpawnRequest, TerminalSpawnResponse, WorkspaceLayout,
+    WorkspaceLayoutSnapshot,
 };
 use muxyard_platform::{ConfigStore, PlatformPaths};
 use muxyard_terminal::TerminalFrameKind;
@@ -108,6 +110,36 @@ pub async fn terminal_render_config() -> Result<TerminalRenderConfig, ApiError> 
     })
     .await
     .map_err(|_| internal("Terminal renderer settings task failed."))?
+}
+
+/// List registered projects.
+#[tauri::command]
+pub async fn project_list() -> Result<ProjectListResponse, ApiError> {
+    tauri::async_runtime::spawn_blocking(|| HostBridge::for_current_user()?.project_list())
+        .await
+        .map_err(|_| internal("Project list task failed."))?
+}
+
+/// Register or reopen a project directory.
+#[tauri::command]
+pub async fn project_register(request: ProjectRegisterRequest) -> Result<Project, ApiError> {
+    tauri::async_runtime::spawn_blocking(move || {
+        HostBridge::for_current_user()?.project_register(request)
+    })
+    .await
+    .map_err(|_| internal("Project registration task failed."))?
+}
+
+/// Remove a project registration.
+#[tauri::command]
+pub async fn project_remove(
+    request: ProjectRemoveRequest,
+) -> Result<ProjectRemoveResponse, ApiError> {
+    tauri::async_runtime::spawn_blocking(move || {
+        HostBridge::for_current_user()?.project_remove(request)
+    })
+    .await
+    .map_err(|_| internal("Project removal task failed."))?
 }
 
 /// Create a native shell session in the host.

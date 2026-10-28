@@ -4,6 +4,7 @@ members = [
     "apps/desktop/src-tauri",
     "crates/core",
     "crates/contracts",
+    "crates/git",
     "crates/ipc",
     "crates/platform",
     "crates/storage",
@@ -19,6 +20,7 @@ publish = false
 
 [workspace.dependencies]
 muxyard-core = { path = "crates/core" }
+muxyard-git = { path = "crates/git" }
 muxyard-contracts = { path = "crates/contracts" }
 muxyard-ipc = { path = "crates/ipc" }
 muxyard-platform = { path = "crates/platform" }

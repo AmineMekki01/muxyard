@@ -1,6 +1,8 @@
 //! Typed local control commands and responses.
 
-use muxyard_contracts::ApiError;
+use muxyard_contracts::{
+    ApiError, Project, ProjectListRequest, ProjectRegisterRequest, ProjectRemoveRequest,
+};
 use serde::{Deserialize, Serialize};
 
 pub use muxyard_contracts::{HostStatusRequest, HostStatusResponse};
@@ -67,3 +69,22 @@ pub const WORKSPACE_LAYOUT_GET_METHOD: &str = "workspace.layout.get";
 
 /// Method name for saving the workspace layout.
 pub const WORKSPACE_LAYOUT_SAVE_METHOD: &str = "workspace.layout.save";
+
+/// Host-owned project registration and recent-project persistence.
+pub trait ProjectStore: Send + Sync {
+    /// List registered projects, most recently opened first.
+    fn list_projects(&self, request: &ProjectListRequest) -> Result<Vec<Project>, String>;
+    /// Register or reopen a project directory.
+    fn register_project(&self, request: &ProjectRegisterRequest) -> Result<Project, String>;
+    /// Remove a project registration.
+    fn remove_project(&self, request: &ProjectRemoveRequest) -> Result<bool, String>;
+}
+
+/// Method name for listing projects.
+pub const PROJECT_LIST_METHOD: &str = "project.list";
+
+/// Method name for registering or reopening a project.
+pub const PROJECT_REGISTER_METHOD: &str = "project.register";
+
+/// Method name for removing a project registration.
+pub const PROJECT_REMOVE_METHOD: &str = "project.remove";
