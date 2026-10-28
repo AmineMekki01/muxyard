@@ -20,13 +20,20 @@ const state = vi.hoisted(() => ({
     open: ReturnType<typeof vi.fn>;
     scrollToLine: ReturnType<typeof vi.fn>;
     buffer: { active: { baseY: number; viewportY: number } };
+    registerLinkProvider: ReturnType<typeof vi.fn>;
     emitData: (data: string) => void;
     emitResize: (rows: number, cols: number) => void;
     emitScroll: () => void;
   },
+  terminalOptions: null as null | { scrollback?: number },
   failWebgl: false,
   fit: null as null | { fit: ReturnType<typeof vi.fn> },
-  search: null as null | { findNext: ReturnType<typeof vi.fn> },
+  search: null as null | {
+    findNext: ReturnType<typeof vi.fn>;
+    findPrevious: ReturnType<typeof vi.fn>;
+    clearDecorations: ReturnType<typeof vi.fn>;
+    onDidChangeResults: ReturnType<typeof vi.fn>;
+  },
   webgl: null as null | {
     dispose: ReturnType<typeof vi.fn>;
     triggerContextLoss: () => void;
@@ -62,8 +69,13 @@ vi.mock("@xterm/xterm", () => ({
     private resizeHandler:
       ((size: { rows: number; cols: number }) => void) | null = null;
 
-    constructor() {
+    constructor(options?: { scrollback?: number }) {
       state.terminal = this as unknown as NonNullable<typeof state.terminal>;
+      state.terminalOptions = options ?? null;
+    }
+
+    registerLinkProvider() {
+      return { dispose: vi.fn() };
     }
 
     loadAddon() {}
@@ -104,6 +116,9 @@ vi.mock("@xterm/addon-fit", () => ({
 vi.mock("@xterm/addon-search", () => ({
   SearchAddon: class {
     findNext = vi.fn();
+    findPrevious = vi.fn();
+    clearDecorations = vi.fn();
+    onDidChangeResults = vi.fn(() => ({ dispose: vi.fn() }));
 
     constructor() {
       state.search = this as unknown as NonNullable<typeof state.search>;
@@ -151,11 +166,15 @@ beforeEach(() => {
   state.invoke.mockReset();
   state.channel = null;
   state.terminal = null;
+  state.terminalOptions = null;
   state.failWebgl = false;
   state.fit = null;
   state.search = null;
   state.webgl = null;
   state.invoke.mockImplementation((command: string, args: unknown) => {
+    if (command === "terminal_render_config") {
+      return Promise.resolve({ scrollback_lines: 12000 });
+    }
     if (command === "terminal_spawn") {
       return Promise.resolve({
         stream_id: "12345678-aaaa-bbbb-cccc-1234567890ab",
@@ -221,6 +240,7 @@ describe("terminal pane", () => {
       }),
     );
     expect(state.terminal).not.toBeNull();
+    expect(state.terminalOptions?.scrollback).toBe(12000);
     expect(state.terminal?.focus).toHaveBeenCalled();
     expect(state.invoke).toHaveBeenCalledWith(
       "terminal_resize",
@@ -331,6 +351,21 @@ describe("terminal pane", () => {
     expect(onViewport).toHaveBeenCalledWith(3);
   });
 
+  it("copies the current terminal selection", async () => {
+    const writeText = vi.fn().mockResolvedValue(undefined);
+    Object.defineProperty(navigator, "clipboard", {
+      configurable: true,
+      value: { writeText },
+    });
+    await mount();
+    const copyButton = document.querySelector<HTMLButtonElement>(
+      '[aria-label="Copy selection from Local shell"]',
+    );
+    expect(copyButton).not.toBeNull();
+    await act(async () => copyButton?.click());
+    expect(writeText).toHaveBeenCalledWith("selected text");
+  });
+
   it("keeps hidden output and focuses only when activated", async () => {
     await mount(false);
     expect(state.terminal?.focus).not.toHaveBeenCalled();
@@ -365,7 +400,28 @@ describe("terminal pane", () => {
         new KeyboardEvent("keydown", { key: "Enter", bubbles: true }),
       );
     });
-    expect(state.search?.findNext).toHaveBeenCalledWith("needle");
+    expect(state.search?.findNext).toHaveBeenCalledWith(
+      "needle",
+      expect.objectContaining({
+        decorations: expect.any(Object),
+      }),
+    );
+
+    await act(async () => {
+      input?.dispatchEvent(
+        new KeyboardEvent("keydown", {
+          key: "Enter",
+          shiftKey: true,
+          bubbles: true,
+        }),
+      );
+    });
+    expect(state.search?.findPrevious).toHaveBeenCalledWith(
+      "needle",
+      expect.objectContaining({
+        decorations: expect.any(Object),
+      }),
+    );
   });
 
   it("shows a lost session and starts a fresh shell with the same history id", async () => {

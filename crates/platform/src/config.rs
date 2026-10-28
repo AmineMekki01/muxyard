@@ -81,6 +81,9 @@ impl Default for LoggingConfig {
 pub struct ResourceLimits {
     /// Retained raw output per terminal session.
     pub pty_output_ring_bytes: u64,
+    /// Bounded renderer scrollback lines per terminal pane.
+    #[serde(default = "default_terminal_scrollback_lines")]
+    pub terminal_scrollback_lines: u32,
     /// Maximum queued output for one client.
     pub client_output_queue_bytes: u64,
     /// Maximum room message body size.
@@ -95,10 +98,15 @@ pub struct ResourceLimits {
     pub max_active_agent_launches: u32,
 }
 
+const fn default_terminal_scrollback_lines() -> u32 {
+    10_000
+}
+
 impl Default for ResourceLimits {
     fn default() -> Self {
         Self {
             pty_output_ring_bytes: 4 * 1024 * 1024,
+            terminal_scrollback_lines: default_terminal_scrollback_lines(),
             client_output_queue_bytes: 4 * 1024 * 1024,
             room_message_bytes: 64 * 1024,
             remote_ws_frame_bytes: 256 * 1024,
@@ -116,6 +124,9 @@ impl ResourceLimits {
         }
         if !(64 * 1024..=64 * 1024 * 1024).contains(&self.client_output_queue_bytes) {
             return Err("client_output_queue_bytes must be between 64 KiB and 64 MiB");
+        }
+        if !(1_000..=100_000).contains(&self.terminal_scrollback_lines) {
+            return Err("terminal_scrollback_lines must be between 1,000 and 100,000");
         }
         if !(1024..=1024 * 1024).contains(&self.room_message_bytes) {
             return Err("room_message_bytes must be between 1 KiB and 1 MiB");
@@ -406,6 +417,7 @@ mod tests {
         assert_eq!(config.logging.level, LogLevel::Info);
         assert_eq!(config.logging.format, LogFormat::Json);
         assert_eq!(config.limits.room_message_bytes, 64 * 1024);
+        assert_eq!(config.limits.terminal_scrollback_lines, 10_000);
         assert_eq!(config.limits.max_active_agent_launches, 5);
         assert!(config.validate().is_ok());
     }
@@ -475,6 +487,18 @@ mod tests {
         let (_root, store) = store();
         let mut value = serde_json::to_value(HostConfig::default()).unwrap();
         value["limits"]["room_message_bytes"] = serde_json::json!(0);
+        let content = serde_json::to_vec(&value).unwrap();
+        fs::write(store.path(), &content).unwrap();
+        let error = store.load_or_create_default().unwrap_err();
+        assert!(matches!(error, ConfigError::Invalid { .. }));
+        assert_eq!(fs::read(store.path()).unwrap(), content);
+    }
+
+    #[test]
+    fn invalid_scrollback_bound_is_rejected() {
+        let (_root, store) = store();
+        let mut value = serde_json::to_value(HostConfig::default()).unwrap();
+        value["limits"]["terminal_scrollback_lines"] = serde_json::json!(0);
         let content = serde_json::to_vec(&value).unwrap();
         fs::write(store.path(), &content).unwrap();
         let error = store.load_or_create_default().unwrap_err();

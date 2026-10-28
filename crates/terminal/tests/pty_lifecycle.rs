@@ -25,6 +25,7 @@ fn config(cwd: PathBuf) -> PtySessionConfig {
         rows: 24,
         cols: 80,
         environment: vec![("TERM".into(), "xterm-256color".into())],
+        ..PtySessionConfig::default()
     }
 }
 
@@ -87,6 +88,30 @@ fn shell_echo_and_cwd_are_visible() {
 
     session.close().unwrap();
     assert_eq!(hub.session_count(), 0);
+}
+
+#[test]
+fn snapshot_respects_configured_tail_bound() {
+    let temp = tempfile::tempdir().unwrap();
+    let hub = hub();
+    let mut config = config(temp.path().to_path_buf());
+    config.output_tail_bytes = 64;
+    let mut session = PtySession::spawn(config, Arc::clone(&hub)).unwrap();
+    let subscription = subscribe(&hub, &session);
+
+    session
+        .write(b"printf '%0256d' 0 | tr '0' 'x'; printf '\\n'\n")
+        .unwrap();
+    read_until(&subscription, b"xxxx", Duration::from_secs(5));
+    let snapshot = session.snapshot();
+    assert!(!snapshot.is_empty());
+    assert!(
+        snapshot.len() <= 64,
+        "tail grew to {} bytes",
+        snapshot.len()
+    );
+
+    session.close().unwrap();
 }
 
 #[test]
@@ -224,6 +249,7 @@ fn shell_path_with_spaces_is_launched_without_interpolation() {
             rows: 24,
             cols: 80,
             environment: Vec::new(),
+            ..PtySessionConfig::default()
         },
         Arc::clone(&hub),
     )
@@ -290,6 +316,7 @@ fn missing_shell_is_rejected_before_stream_creation() {
             rows: 24,
             cols: 80,
             environment: Vec::new(),
+            ..PtySessionConfig::default()
         },
         Arc::clone(&hub),
     )

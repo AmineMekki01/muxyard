@@ -823,6 +823,7 @@ fn terminal_service_error(error: TerminalServiceError) -> ApiError {
             },
             muxyard_terminal::PtyError::Platform(_)
             | muxyard_terminal::PtyError::InvalidSize
+            | muxyard_terminal::PtyError::InvalidOutputTail
             | muxyard_terminal::PtyError::Pty(_) => ApiError {
                 code: ErrorCode::InvalidRequest,
                 message: "The terminal session could not be started or updated.".to_string(),

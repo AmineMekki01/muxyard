@@ -15,8 +15,8 @@ pub use errors::{ApiError, ErrorCode};
 pub use host::{HostStatusEvent, HostStatusRequest, HostStatusResponse};
 pub use models::{AgentStatus, ExecutionEnvironment, Id, TaskState};
 pub use terminal::{
-    TerminalCloseRequest, TerminalInputRequest, TerminalResizeRequest, TerminalSnapshotRequest,
-    TerminalSnapshotResponse, TerminalSpawnRequest, TerminalSpawnResponse,
+    TerminalCloseRequest, TerminalInputRequest, TerminalRenderConfig, TerminalResizeRequest,
+    TerminalSnapshotRequest, TerminalSnapshotResponse, TerminalSpawnRequest, TerminalSpawnResponse,
 };
 pub use workspace::{
     MAX_WORKSPACE_LAYOUT_BYTES, TerminalLayoutNode, TerminalSplitDirection, TerminalTabLayout,

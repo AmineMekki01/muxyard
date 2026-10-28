@@ -10,9 +10,10 @@ use std::{
 
 use muxyard_contracts::{
     ApiError, HostStatusEvent, HostStatusResponse, TerminalCloseRequest, TerminalInputRequest,
-    TerminalResizeRequest, TerminalSnapshotRequest, TerminalSnapshotResponse, TerminalSpawnRequest,
-    TerminalSpawnResponse, WorkspaceLayout, WorkspaceLayoutSnapshot,
+    TerminalRenderConfig, TerminalResizeRequest, TerminalSnapshotRequest, TerminalSnapshotResponse,
+    TerminalSpawnRequest, TerminalSpawnResponse, WorkspaceLayout, WorkspaceLayoutSnapshot,
 };
+use muxyard_platform::{ConfigStore, PlatformPaths};
 use muxyard_terminal::TerminalFrameKind;
 use tauri::{
     State,
@@ -90,6 +91,23 @@ pub fn host_watch(
 #[tauri::command]
 pub fn host_unwatch(state: State<'_, HostWatchState>) {
     state.stop();
+}
+
+/// Read the bounded terminal renderer settings from the shared local config.
+#[tauri::command]
+pub async fn terminal_render_config() -> Result<TerminalRenderConfig, ApiError> {
+    tauri::async_runtime::spawn_blocking(|| {
+        let paths = PlatformPaths::for_current_user()
+            .map_err(|_| internal("Terminal renderer settings are unavailable."))?;
+        let config = ConfigStore::new(paths.config_path())
+            .load_or_create_default()
+            .map_err(|_| internal("Terminal renderer settings are unavailable."))?;
+        Ok(TerminalRenderConfig {
+            scrollback_lines: config.limits.terminal_scrollback_lines,
+        })
+    })
+    .await
+    .map_err(|_| internal("Terminal renderer settings task failed."))?
 }
 
 /// Create a native shell session in the host.

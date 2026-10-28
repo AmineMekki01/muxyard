@@ -18,7 +18,10 @@ pub use hub::{
     TerminalAttachResponse, TerminalHub, TerminalHubError, TerminalLimits, TerminalSession,
     TerminalSubscription,
 };
-pub use pty::{PtyError, PtyExitStatus, PtySession, PtySessionConfig, PtySessionIdentity};
+pub use pty::{
+    DEFAULT_OUTPUT_TAIL_BYTES, PtyError, PtyExitStatus, PtySession, PtySessionConfig,
+    PtySessionIdentity,
+};
 pub use service::{
     TerminalService, TerminalServiceError, TerminalSessionStore, TerminalStoreError,
 };

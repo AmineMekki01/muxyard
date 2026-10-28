@@ -463,6 +463,14 @@ kbd {
   width: auto;
 }
 
+.terminal-search-count {
+  min-width: 44px;
+  color: #9db6bc;
+  font-family: var(--font-mono);
+  font-size: 10px;
+  text-align: right;
+}
+
 .terminal-searchbar .shell-button {
   padding: 4px 9px;
   border-color: #31535d;

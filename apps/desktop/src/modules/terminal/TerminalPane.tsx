@@ -10,16 +10,31 @@ import { useCallback, useEffect, useRef, useState } from "react";
 
 import type { TerminalSpawnResponse } from "@muxyard/contracts";
 
+import { createLinkProvider } from "./links";
 import { TerminalIcon } from "./TerminalIcon";
 import { createResizeScheduler } from "./resize";
 import {
   attachTerminal,
   closeTerminal,
+  getTerminalRenderConfig,
   inputTerminal,
   resizeTerminal,
   snapshotTerminal,
   spawnTerminal,
 } from "./terminal";
+
+export const DEFAULT_SCROLLBACK_LINES = 10_000;
+
+const SEARCH_OPTIONS = {
+  decorations: {
+    matchBackground: "#3b4f58",
+    matchBorder: "#56d4dd",
+    matchOverviewRuler: "#56d4dd",
+    activeMatchBackground: "#7a5c20",
+    activeMatchBorder: "#e3b341",
+    activeMatchColorOverviewRuler: "#e3b341",
+  },
+};
 
 type TerminalPaneProps = {
   title?: string;
@@ -71,6 +86,10 @@ export function TerminalPane({
   const [session, setSession] = useState<TerminalSpawnResponse | null>(null);
   const [searchOpen, setSearchOpen] = useState(false);
   const [searchText, setSearchText] = useState("");
+  const [searchResults, setSearchResults] = useState({
+    index: -1,
+    count: 0,
+  });
   const searchInputRef = useRef<HTMLInputElement | null>(null);
   const isLost = (sessionLost || restoreFailed) && !forceNew;
 
@@ -88,11 +107,16 @@ export function TerminalPane({
     let dataDisposable: { dispose: () => void } | null = null;
     let resizeDisposable: { dispose: () => void } | null = null;
     let scrollDisposable: { dispose: () => void } | null = null;
+    let searchResultsDisposable: { dispose: () => void } | null = null;
+    let linkProviderDisposable: { dispose: () => void } | null = null;
 
     setError(null);
     setSession(null);
 
     const run = async () => {
+      const renderConfig = await getTerminalRenderConfig().catch(() => null);
+      const scrollback =
+        renderConfig?.scrollback_lines ?? DEFAULT_SCROLLBACK_LINES;
       const restoring = Boolean(sessionId) && !forceNew;
       const info = restoring
         ? {
@@ -132,7 +156,7 @@ export function TerminalPane({
         letterSpacing: 0.1,
         lineHeight: 1.35,
         minimumContrastRatio: 4.5,
-        scrollback: 5000,
+        scrollback,
         theme: {
           background: "#0f1a1f",
           foreground: "#e6edf0",
@@ -166,7 +190,15 @@ export function TerminalPane({
       searchAddonRef.current = searchAddon;
       terminal.loadAddon(fitAddon);
       terminal.loadAddon(searchAddon);
+      searchResultsDisposable = searchAddon.onDidChangeResults(
+        ({ resultIndex, resultCount }) => {
+          setSearchResults({ index: resultIndex, count: resultCount });
+        },
+      );
       terminal.open(container);
+      linkProviderDisposable = terminal.registerLinkProvider(
+        createLinkProvider(terminal),
+      );
       if (activeRef.current) terminal.focus();
 
       try {
@@ -264,6 +296,8 @@ export function TerminalPane({
       dataDisposable?.dispose();
       resizeDisposable?.dispose();
       scrollDisposable?.dispose();
+      searchResultsDisposable?.dispose();
+      linkProviderDisposable?.dispose();
       webgl?.dispose();
       fitAddonRef.current = null;
       searchAddonRef.current = null;
@@ -290,11 +324,19 @@ export function TerminalPane({
 
   const findNext = useCallback(() => {
     if (searchText && searchAddonRef.current) {
-      searchAddonRef.current.findNext(searchText);
+      searchAddonRef.current.findNext(searchText, SEARCH_OPTIONS);
+    }
+  }, [searchText]);
+
+  const findPrevious = useCallback(() => {
+    if (searchText && searchAddonRef.current) {
+      searchAddonRef.current.findPrevious(searchText, SEARCH_OPTIONS);
     }
   }, [searchText]);
 
   const closeSearch = () => {
+    searchAddonRef.current?.clearDecorations();
+    setSearchResults({ index: -1, count: 0 });
     setSearchOpen(false);
     terminalRef.current?.focus();
   };
@@ -459,13 +501,30 @@ export function TerminalPane({
             onKeyDown={(event) => {
               if (event.key === "Enter") {
                 event.preventDefault();
-                findNext();
+                if (event.shiftKey) {
+                  findPrevious();
+                } else {
+                  findNext();
+                }
               } else if (event.key === "Escape") {
                 event.preventDefault();
                 closeSearch();
               }
             }}
           />
+          <span className="terminal-search-count" aria-live="polite">
+            {searchResults.count > 0
+              ? `${searchResults.index + 1}/${searchResults.count}`
+              : "0/0"}
+          </span>
+          <button
+            type="button"
+            className="shell-button"
+            aria-label="Previous search result"
+            onClick={findPrevious}
+          >
+            Prev
+          </button>
           <button type="button" className="shell-button" onClick={findNext}>
             Next
           </button>

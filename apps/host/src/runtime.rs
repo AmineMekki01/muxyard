@@ -22,7 +22,9 @@ use muxyard_storage::{
     Database, DatabaseOptions, HostInstance, HostState, mark_stale_terminal_sessions,
     reconcile_stale_host_instances, record_host_instance, update_host_instance_state,
 };
-use muxyard_terminal::{TerminalHub, TerminalLimits, TerminalService, TerminalSessionStore};
+use muxyard_terminal::{
+    DEFAULT_OUTPUT_TAIL_BYTES, TerminalHub, TerminalLimits, TerminalService, TerminalSessionStore,
+};
 use uuid::Uuid;
 
 use crate::{
@@ -136,11 +138,17 @@ impl HostRuntime {
             #[cfg(windows)]
             tracing::warn!(%error, "console signal handler unavailable; stop marker remains active");
         }
-        let terminal = Arc::new(TerminalService::with_store_and_history(
-            Arc::new(TerminalHub::new(TerminalLimits::default())?),
-            Arc::clone(&store) as Arc<dyn TerminalSessionStore>,
-            history_dir,
-        ));
+        let terminal = Arc::new(
+            TerminalService::with_store_and_history(
+                Arc::new(TerminalHub::new(TerminalLimits::default())?),
+                Arc::clone(&store) as Arc<dyn TerminalSessionStore>,
+                history_dir,
+            )
+            .with_output_tail_bytes(
+                usize::try_from(config.limits.pty_output_ring_bytes)
+                    .unwrap_or(DEFAULT_OUTPUT_TAIL_BYTES),
+            ),
+        );
         let ipc = IpcServer::start_with_terminal_service_and_store(
             &paths,
             HostStatusResponse {

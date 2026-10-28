@@ -165,6 +165,13 @@ export type TerminalSpawnResponse = {
   cols: number;
 };
 
+export type TerminalRenderConfig = {
+  /**
+   * Maximum scrollback lines retained by the renderer.
+   */
+  scrollback_lines: number;
+};
+
 export type TerminalSnapshotRequest = {
   /**
    * Target stream/session.
