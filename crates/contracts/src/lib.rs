@@ -7,6 +7,7 @@ mod control;
 mod errors;
 mod host;
 mod models;
+mod projects;
 mod terminal;
 mod workspace;
 
@@ -14,6 +15,10 @@ pub use control::{ControlEnvelope, ControlMessageType, decode_control};
 pub use errors::{ApiError, ErrorCode};
 pub use host::{HostStatusEvent, HostStatusRequest, HostStatusResponse};
 pub use models::{AgentStatus, ExecutionEnvironment, Id, TaskState};
+pub use projects::{
+    Project, ProjectListRequest, ProjectListResponse, ProjectRegisterRequest, ProjectRemoveRequest,
+    ProjectRemoveResponse, ProjectTrust,
+};
 pub use terminal::{
     TerminalCloseRequest, TerminalInputRequest, TerminalRenderConfig, TerminalResizeRequest,
     TerminalSnapshotRequest, TerminalSnapshotResponse, TerminalSpawnRequest, TerminalSpawnResponse,

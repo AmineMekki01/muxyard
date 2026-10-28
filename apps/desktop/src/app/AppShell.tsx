@@ -2,8 +2,16 @@
 
 import { useEffect, useRef, useState } from "react";
 
+import type { Project } from "@muxyard/contracts";
+
 import { useHostConnection } from "../ipc/useHostConnection";
 import { hostStatusDetail } from "../ipc/host";
+import {
+  listProjects,
+  registerProject,
+  removeProject,
+} from "../modules/projects/projects";
+import { ProjectSidebar } from "../modules/projects/ProjectSidebar";
 import {
   TerminalWorkspace,
   type TerminalWorkspaceHandle,
@@ -24,8 +32,14 @@ const COMMANDS = createCommands();
 export function AppShell() {
   const [paletteOpen, setPaletteOpen] = useState(false);
   const [helpOpen, setHelpOpen] = useState(false);
+  const [projects, setProjects] = useState<Project[]>([]);
+  const [activeProjectId, setActiveProjectId] = useState<string | null>(null);
+  const [projectBusy, setProjectBusy] = useState(false);
+  const [projectError, setProjectError] = useState<string | null>(null);
   const terminalRef = useRef<TerminalWorkspaceHandle>(null);
   const { state: hostState, reconnect } = useHostConnection();
+  const activeProject =
+    projects.find((project) => project.id === activeProjectId) ?? null;
   const {
     activeRegion,
     setActiveRegion,
@@ -58,6 +72,100 @@ export function AppShell() {
   };
 
   useEffect(() => {
+    if (hostState.kind !== "connected") return;
+    let alive = true;
+    setProjectBusy(true);
+    void listProjects()
+      .then((response) => {
+        if (!alive) return;
+        setProjects(response.projects);
+        setActiveProjectId((current) =>
+          current && response.projects.some((project) => project.id === current)
+            ? current
+            : (response.projects[0]?.id ?? null),
+        );
+        setProjectError(null);
+      })
+      .catch((reason: unknown) => {
+        if (alive) {
+          setProjectError(
+            reason instanceof Error
+              ? reason.message
+              : "Projects could not be loaded.",
+          );
+        }
+      })
+      .finally(() => {
+        if (alive) setProjectBusy(false);
+      });
+    return () => {
+      alive = false;
+    };
+  }, [hostState.kind]);
+
+  const openProject = (project: Project) => {
+    setActiveProjectId(project.id);
+    void registerProject({ path: project.root_path, name: project.name })
+      .then((updated) => {
+        setProjects((current) => [
+          updated,
+          ...current.filter((item) => item.id !== updated.id),
+        ]);
+        setProjectError(null);
+      })
+      .catch((reason: unknown) => {
+        setProjectError(
+          reason instanceof Error
+            ? reason.message
+            : "The project could not be opened.",
+        );
+      });
+  };
+
+  const addProject = (path: string) => {
+    setProjectBusy(true);
+    void registerProject({ path, name: null })
+      .then((project) => {
+        setProjects((current) => [
+          project,
+          ...current.filter((item) => item.id !== project.id),
+        ]);
+        setActiveProjectId(project.id);
+        setProjectError(null);
+      })
+      .catch((reason: unknown) => {
+        setProjectError(
+          reason instanceof Error
+            ? reason.message
+            : "The project directory could not be opened.",
+        );
+      })
+      .finally(() => setProjectBusy(false));
+  };
+
+  const forgetProject = (project: Project) => {
+    setProjectBusy(true);
+    void removeProject({ id: project.id })
+      .then(() => {
+        setProjects((current) =>
+          current.filter((item) => item.id !== project.id),
+        );
+        setActiveProjectId((current) =>
+          current === project.id ? null : current,
+        );
+        setProjectError(null);
+      })
+      .catch((reason: unknown) => {
+        setProjectError(
+          reason instanceof Error
+            ? reason.message
+            : "The project could not be removed.",
+        );
+      })
+      .finally(() => setProjectBusy(false));
+  };
+
+  useEffect(() => {
     const onKeyDown = (event: KeyboardEvent) => {
       if (paletteOpen || helpOpen) return;
       if (shouldIgnoreGlobalShortcut(event.target)) return;
@@ -85,7 +193,9 @@ export function AppShell() {
             </span>
             Muxyard
           </span>
-          <span className="breadcrumb">Workspace / No project</span>
+          <span className="breadcrumb">
+            Workspace / {activeProject?.name ?? "No project"}
+          </span>
         </div>
         <div className="topbar-actions">
           <button
@@ -146,10 +256,15 @@ export function AppShell() {
               <h2>Projects</h2>
             </div>
             <nav aria-label="Workspace sections">
-              <section className="sidebar-section">
-                <h3>Projects</h3>
-                <p>No projects registered.</p>
-              </section>
+              <ProjectSidebar
+                projects={projects}
+                activeProjectId={activeProjectId}
+                busy={projectBusy}
+                error={projectError}
+                onOpen={openProject}
+                onRegister={addProject}
+                onRemove={forgetProject}
+              />
               <section className="sidebar-section">
                 <h3>Tasks</h3>
                 <p>No tasks yet.</p>
@@ -220,9 +335,9 @@ export function AppShell() {
                 </button>
               </div>
               <p className="scope-note">
-                Project registration, agents, and remote access are not
-                connected yet. The local terminal is available when the host is
-                ready.
+                Project registration is available in the sidebar. Agents and
+                remote access are not connected yet. The local terminal is
+                available when the host is ready.
               </p>
             </div>
           )}

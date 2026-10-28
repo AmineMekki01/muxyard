@@ -13,12 +13,17 @@ use std::{
 };
 
 use muxyard_contracts::{
-    ApiError, ErrorCode, HostStatusEvent, HostStatusResponse, PROTOCOL_VERSION,
-    TerminalCloseRequest, TerminalInputRequest, TerminalResizeRequest, TerminalSnapshotRequest,
-    TerminalSnapshotResponse, TerminalSpawnRequest, TerminalSpawnResponse, WorkspaceLayout,
-    WorkspaceLayoutGetRequest, WorkspaceLayoutSaveRequest, WorkspaceLayoutSnapshot,
+    ApiError, ErrorCode, HostStatusEvent, HostStatusResponse, PROTOCOL_VERSION, Project,
+    ProjectListRequest, ProjectListResponse, ProjectRegisterRequest, ProjectRemoveRequest,
+    ProjectRemoveResponse, TerminalCloseRequest, TerminalInputRequest, TerminalResizeRequest,
+    TerminalSnapshotRequest, TerminalSnapshotResponse, TerminalSpawnRequest, TerminalSpawnResponse,
+    WorkspaceLayout, WorkspaceLayoutGetRequest, WorkspaceLayoutSaveRequest,
+    WorkspaceLayoutSnapshot,
 };
-use muxyard_ipc::{IpcClient, IpcError, IpcResponse, TerminalStream};
+use muxyard_ipc::{
+    IpcClient, IpcError, IpcResponse, PROJECT_LIST_METHOD, PROJECT_REGISTER_METHOD,
+    PROJECT_REMOVE_METHOD, TerminalStream,
+};
 use muxyard_platform::PlatformPaths;
 use serde::{Serialize, de::DeserializeOwned};
 use tauri::ipc::Channel;
@@ -157,6 +162,24 @@ impl HostBridge {
     }
 
     /// Create a native shell session in the host.
+    pub(crate) fn project_list(&self) -> Result<ProjectListResponse, ApiError> {
+        self.request(PROJECT_LIST_METHOD, ProjectListRequest {})
+    }
+
+    pub(crate) fn project_register(
+        &self,
+        request: ProjectRegisterRequest,
+    ) -> Result<Project, ApiError> {
+        self.request(PROJECT_REGISTER_METHOD, request)
+    }
+
+    pub(crate) fn project_remove(
+        &self,
+        request: ProjectRemoveRequest,
+    ) -> Result<ProjectRemoveResponse, ApiError> {
+        self.request(PROJECT_REMOVE_METHOD, request)
+    }
+
     pub(crate) fn terminal_spawn(
         &self,
         request: TerminalSpawnRequest,

@@ -20,7 +20,8 @@ pub use frame::{MAX_FRAME_BYTES, read_frame, write_frame};
 pub(crate) use frame::{read_frame_until, write_frame_until};
 pub use server::{IpcOptions, IpcServer};
 pub use types::{
-    HOST_STATUS_METHOD, HostStatusRequest, HostStatusResponse, IpcResponse, TERMINAL_ATTACH_METHOD,
+    HOST_STATUS_METHOD, HostStatusRequest, HostStatusResponse, IpcResponse, PROJECT_LIST_METHOD,
+    PROJECT_REGISTER_METHOD, PROJECT_REMOVE_METHOD, ProjectStore, TERMINAL_ATTACH_METHOD,
     TERMINAL_CLOSE_METHOD, TERMINAL_INPUT_METHOD, TERMINAL_RESIZE_METHOD, TERMINAL_SNAPSHOT_METHOD,
     TERMINAL_SPAWN_METHOD, WORKSPACE_LAYOUT_GET_METHOD, WORKSPACE_LAYOUT_SAVE_METHOD,
     WorkspaceLayoutStore,

@@ -43,6 +43,7 @@ use tracing::warn;
 
 use crate::{
     HOST_STATUS_METHOD, HostStatusRequest, HostStatusResponse, IpcError, IpcResponse,
+    PROJECT_LIST_METHOD, PROJECT_REGISTER_METHOD, PROJECT_REMOVE_METHOD, ProjectStore,
     TERMINAL_ATTACH_METHOD, TERMINAL_CLOSE_METHOD, TERMINAL_INPUT_METHOD, TERMINAL_RESIZE_METHOD,
     TERMINAL_SNAPSHOT_METHOD, TERMINAL_SPAWN_METHOD, WORKSPACE_LAYOUT_GET_METHOD,
     WORKSPACE_LAYOUT_SAVE_METHOD, WorkspaceLayoutStore, read_frame_until, write_frame_until,
@@ -81,7 +82,7 @@ impl IpcServer {
     /// made owner-only after binding. On Windows the named pipe receives a
     /// security descriptor for the current user's SID.
     pub fn start(paths: &PlatformPaths, status: HostStatusResponse) -> Result<Self, IpcError> {
-        Self::start_inner(paths, status, None, None, IpcOptions::default())
+        Self::start_inner(paths, status, None, None, None, IpcOptions::default())
     }
 
     /// Bind the endpoint with explicit timeout settings.
@@ -90,7 +91,7 @@ impl IpcServer {
         status: HostStatusResponse,
         options: IpcOptions,
     ) -> Result<Self, IpcError> {
-        Self::start_inner(paths, status, None, None, options)
+        Self::start_inner(paths, status, None, None, None, options)
     }
 
     /// Bind the endpoint and enable terminal stream attachments.
@@ -103,6 +104,7 @@ impl IpcServer {
             paths,
             status,
             Some(Arc::new(TerminalService::new(terminal))),
+            None,
             None,
             IpcOptions::default(),
         )
@@ -120,6 +122,7 @@ impl IpcServer {
             status,
             Some(Arc::new(TerminalService::new(terminal))),
             None,
+            None,
             options,
         )
     }
@@ -130,7 +133,14 @@ impl IpcServer {
         status: HostStatusResponse,
         terminal: Arc<TerminalService>,
     ) -> Result<Self, IpcError> {
-        Self::start_inner(paths, status, Some(terminal), None, IpcOptions::default())
+        Self::start_inner(
+            paths,
+            status,
+            Some(terminal),
+            None,
+            None,
+            IpcOptions::default(),
+        )
     }
 
     /// Bind the endpoint with a managed terminal service and explicit timeouts.
@@ -140,7 +150,7 @@ impl IpcServer {
         terminal: Arc<TerminalService>,
         options: IpcOptions,
     ) -> Result<Self, IpcError> {
-        Self::start_inner(paths, status, Some(terminal), None, options)
+        Self::start_inner(paths, status, Some(terminal), None, None, options)
     }
 
     /// Bind the endpoint with terminal and workspace persistence stores.
@@ -155,6 +165,41 @@ impl IpcServer {
             status,
             Some(terminal),
             Some(layout_store),
+            None,
+            IpcOptions::default(),
+        )
+    }
+
+    /// Bind the endpoint with project registration only.
+    pub fn start_with_project_store(
+        paths: &PlatformPaths,
+        status: HostStatusResponse,
+        project_store: Arc<dyn ProjectStore>,
+    ) -> Result<Self, IpcError> {
+        Self::start_inner(
+            paths,
+            status,
+            None,
+            None,
+            Some(project_store),
+            IpcOptions::default(),
+        )
+    }
+
+    /// Bind the endpoint with terminal, layout, and project persistence stores.
+    pub fn start_with_terminal_service_and_stores(
+        paths: &PlatformPaths,
+        status: HostStatusResponse,
+        terminal: Arc<TerminalService>,
+        layout_store: Arc<dyn WorkspaceLayoutStore>,
+        project_store: Arc<dyn ProjectStore>,
+    ) -> Result<Self, IpcError> {
+        Self::start_inner(
+            paths,
+            status,
+            Some(terminal),
+            Some(layout_store),
+            Some(project_store),
             IpcOptions::default(),
         )
     }
@@ -164,6 +209,7 @@ impl IpcServer {
         status: HostStatusResponse,
         terminal: Option<Arc<TerminalService>>,
         layout_store: Option<Arc<dyn WorkspaceLayoutStore>>,
+        project_store: Option<Arc<dyn ProjectStore>>,
         options: IpcOptions,
     ) -> Result<Self, IpcError> {
         #[cfg(windows)]
@@ -180,6 +226,7 @@ impl IpcServer {
         let accept_status = Arc::new(status);
         let accept_terminal = terminal;
         let accept_layout = layout_store;
+        let accept_project = project_store;
         let accept_thread = thread::Builder::new()
             .name("muxyard-ipc-accept".to_string())
             .spawn(move || {
@@ -190,6 +237,7 @@ impl IpcServer {
                     accept_status,
                     accept_terminal,
                     accept_layout,
+                    accept_project,
                     options,
                 );
             })
@@ -241,6 +289,7 @@ impl Drop for IpcServer {
     }
 }
 
+#[allow(clippy::too_many_arguments)]
 fn accept_loop(
     listener: LocalSocketListener,
     stop: Arc<AtomicBool>,
@@ -248,6 +297,7 @@ fn accept_loop(
     status: Arc<HostStatusResponse>,
     terminal: Option<Arc<TerminalService>>,
     layout_store: Option<Arc<dyn WorkspaceLayoutStore>>,
+    project_store: Option<Arc<dyn ProjectStore>>,
     options: IpcOptions,
 ) {
     while !stop.load(Ordering::SeqCst) {
@@ -257,6 +307,7 @@ fn accept_loop(
                 let connection_status = Arc::clone(&status);
                 let connection_terminal = terminal.clone();
                 let connection_layout = layout_store.clone();
+                let connection_project = project_store.clone();
                 match thread::Builder::new()
                     .name("muxyard-ipc-connection".to_string())
                     .spawn(move || {
@@ -265,6 +316,7 @@ fn accept_loop(
                             connection_status.as_ref(),
                             connection_terminal.as_deref(),
                             connection_layout.as_deref(),
+                            connection_project.as_deref(),
                             connection_stop.as_ref(),
                             options,
                         ) {
@@ -296,6 +348,7 @@ fn handle_connection(
     status: &HostStatusResponse,
     terminal: Option<&TerminalService>,
     layout_store: Option<&dyn WorkspaceLayoutStore>,
+    project_store: Option<&dyn ProjectStore>,
     stop: &AtomicBool,
     options: IpcOptions,
 ) -> Result<(), IpcError> {
@@ -318,6 +371,7 @@ fn handle_connection(
             status,
             terminal,
             layout_store,
+            project_store,
             options.request_timeout,
         )? {
             FrameAction::Continue => {}
@@ -341,6 +395,7 @@ fn handle_frame(
     status: &HostStatusResponse,
     terminal: Option<&TerminalService>,
     layout_store: Option<&dyn WorkspaceLayoutStore>,
+    project_store: Option<&dyn ProjectStore>,
     timeout: Duration,
 ) -> Result<FrameAction, IpcError> {
     let request = match decode_control::<Value>(frame) {
@@ -395,6 +450,148 @@ fn handle_frame(
                 IpcResponse::ok(data),
                 timeout,
             )?;
+        }
+        PROJECT_LIST_METHOD => {
+            let Some(project_store) = project_store else {
+                write_error(
+                    stream,
+                    request.id,
+                    request.method,
+                    ApiError {
+                        code: ErrorCode::UnsupportedCapability,
+                        message: "Project registration is not available on this host.".to_string(),
+                    },
+                    timeout,
+                )?;
+                return Ok(FrameAction::Continue);
+            };
+            if serde_json::from_value::<muxyard_contracts::ProjectListRequest>(request.data)
+                .is_err()
+            {
+                write_error(
+                    stream,
+                    request.id,
+                    request.method,
+                    invalid_request("The project.list request body is invalid."),
+                    timeout,
+                )?;
+                return Ok(FrameAction::Continue);
+            }
+            match project_store.list_projects(&muxyard_contracts::ProjectListRequest {}) {
+                Ok(projects) => write_response(
+                    stream,
+                    request.id,
+                    request.method,
+                    IpcResponse::ok(muxyard_contracts::ProjectListResponse { projects }),
+                    timeout,
+                )?,
+                Err(_) => write_error(
+                    stream,
+                    request.id,
+                    request.method,
+                    ApiError {
+                        code: ErrorCode::Internal,
+                        message: "Projects could not be loaded.".to_string(),
+                    },
+                    timeout,
+                )?,
+            }
+        }
+        PROJECT_REGISTER_METHOD => {
+            let Some(project_store) = project_store else {
+                write_error(
+                    stream,
+                    request.id,
+                    request.method,
+                    ApiError {
+                        code: ErrorCode::UnsupportedCapability,
+                        message: "Project registration is not available on this host.".to_string(),
+                    },
+                    timeout,
+                )?;
+                return Ok(FrameAction::Continue);
+            };
+            let register: muxyard_contracts::ProjectRegisterRequest =
+                match serde_json::from_value(request.data) {
+                    Ok(register) => register,
+                    Err(_) => {
+                        write_error(
+                            stream,
+                            request.id,
+                            request.method,
+                            invalid_request("The project.register request body is invalid."),
+                            timeout,
+                        )?;
+                        return Ok(FrameAction::Continue);
+                    }
+                };
+            match project_store.register_project(&register) {
+                Ok(project) => write_response(
+                    stream,
+                    request.id,
+                    request.method,
+                    IpcResponse::ok(project),
+                    timeout,
+                )?,
+                Err(_) => write_error(
+                    stream,
+                    request.id,
+                    request.method,
+                    ApiError {
+                        code: ErrorCode::InvalidRequest,
+                        message: "The project directory could not be registered.".to_string(),
+                    },
+                    timeout,
+                )?,
+            }
+        }
+        PROJECT_REMOVE_METHOD => {
+            let Some(project_store) = project_store else {
+                write_error(
+                    stream,
+                    request.id,
+                    request.method,
+                    ApiError {
+                        code: ErrorCode::UnsupportedCapability,
+                        message: "Project registration is not available on this host.".to_string(),
+                    },
+                    timeout,
+                )?;
+                return Ok(FrameAction::Continue);
+            };
+            let remove: muxyard_contracts::ProjectRemoveRequest =
+                match serde_json::from_value(request.data) {
+                    Ok(remove) => remove,
+                    Err(_) => {
+                        write_error(
+                            stream,
+                            request.id,
+                            request.method,
+                            invalid_request("The project.remove request body is invalid."),
+                            timeout,
+                        )?;
+                        return Ok(FrameAction::Continue);
+                    }
+                };
+            match project_store.remove_project(&remove) {
+                Ok(removed) => write_response(
+                    stream,
+                    request.id,
+                    request.method,
+                    IpcResponse::ok(muxyard_contracts::ProjectRemoveResponse { removed }),
+                    timeout,
+                )?,
+                Err(_) => write_error(
+                    stream,
+                    request.id,
+                    request.method,
+                    ApiError {
+                        code: ErrorCode::Internal,
+                        message: "The project could not be removed.".to_string(),
+                    },
+                    timeout,
+                )?,
+            }
         }
         WORKSPACE_LAYOUT_GET_METHOD => {
             let Some(layout_store) = layout_store else {
