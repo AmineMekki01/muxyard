@@ -216,6 +216,31 @@ current-user DACL, but that path is also unverified on macOS.
 
 ## Checks And Builds
 
+Use the local verification entry points when you do not want to run each command
+by hand:
+
+```sh
+make run          # build debug host and start the desktop app
+make run-isolated # start the app with target/dev-smoke as its data root
+make stop-isolated # stop the isolated smoke host
+make clean-isolated # remove the isolated smoke root
+make verify       # checks, Rust/frontend tests, JS/Rust builds, diff check
+make verify-full  # verify plus release host and desktop builds
+make test         # Rust and frontend tests only
+make check        # formatting, lint, types, contracts, diff
+make ci-dispatch  # run hosted macOS/Linux/Windows CI for the current branch
+make ci-watch     # watch the latest hosted CI run for the current branch
+make ci-branch    # dispatch and watch hosted CI
+make help         # list all targets
+```
+
+`make verify` mirrors the local CI checks. `make verify-full` additionally builds
+the release host and desktop executable. Use `make ci-branch` to run the real
+macOS/Linux/Windows matrix through GitHub Actions; it requires an authenticated
+`gh` CLI and a pushed branch.
+
+Run the individual commands directly when diagnosing a failure:
+
 ```sh
 cargo fmt --check
 cargo clippy --locked --workspace --all-targets -- -D warnings
