@@ -366,21 +366,54 @@ describe("terminal pane", () => {
     expect(writeText).toHaveBeenCalledWith("selected text");
   });
 
-  it("keeps hidden output and focuses only when activated", async () => {
+  it("buffers hidden output and flushes it when activated", async () => {
     await mount(false);
     expect(state.terminal?.focus).not.toHaveBeenCalled();
     const bytes = new Uint8Array([104, 105]);
     act(() => {
       state.channel?.onmessage(bytes.buffer);
     });
-    expect(state.terminal?.write).toHaveBeenCalledWith(bytes);
+    expect(state.terminal?.write).not.toHaveBeenCalled();
 
     state.fit?.fit.mockClear();
     await act(async () => {
       root?.render(<TerminalPane active />);
     });
+    expect(state.terminal?.write).toHaveBeenCalledWith(bytes);
     expect(state.terminal?.focus).toHaveBeenCalled();
     expect(state.fit?.fit).toHaveBeenCalled();
+  });
+
+  it("bounds 100k lines of hidden output and marks truncation", async () => {
+    await mount(false);
+    const fixture = Array.from(
+      { length: 100_000 },
+      (_, index) => `${index}\n`,
+    ).join("");
+    const fixtureBytes = new TextEncoder().encode(fixture);
+    for (let offset = 0; offset < fixtureBytes.length; offset += 64 * 1024) {
+      const chunk = fixtureBytes.slice(offset, offset + 64 * 1024);
+      act(() => state.channel?.onmessage(chunk.buffer));
+    }
+    await act(async () => {
+      root?.render(<TerminalPane active />);
+    });
+
+    const writes = state.terminal?.write.mock.calls ?? [];
+    const markerIndex = writes.findIndex(
+      ([value]) => typeof value === "string" && value.includes("truncated"),
+    );
+    const lastByteIndex = writes.reduce(
+      (last, [value], index) => (value instanceof Uint8Array ? index : last),
+      -1,
+    );
+    const bytesWritten = writes.reduce((total, [value]) => {
+      if (value instanceof Uint8Array) return total + value.byteLength;
+      return total;
+    }, 0);
+    expect(markerIndex).toBeGreaterThan(lastByteIndex);
+    expect(bytesWritten).toBeLessThanOrEqual(256 * 1024);
+    expect(bytesWritten).toBeGreaterThan(0);
   });
 
   it("opens the compact search bar and finds the next match", async () => {

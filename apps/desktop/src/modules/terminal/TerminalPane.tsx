@@ -24,6 +24,9 @@ import {
 } from "./terminal";
 
 export const DEFAULT_SCROLLBACK_LINES = 10_000;
+export const HIDDEN_OUTPUT_LIMIT_BYTES = 256 * 1024;
+
+const HIDDEN_TRUNCATION_MARKER = "\r\n[Earlier hidden output truncated]\r\n";
 
 const SEARCH_OPTIONS = {
   decorations: {
@@ -79,6 +82,13 @@ export function TerminalPane({
   const terminalRef = useRef<Terminal | null>(null);
   const activeRef = useRef(active);
   activeRef.current = active;
+  const zoomHiddenRef = useRef(zoomHidden);
+  zoomHiddenRef.current = zoomHidden;
+  const hiddenOutputRef = useRef({
+    chunks: [] as Uint8Array[],
+    bytes: 0,
+    truncated: false,
+  });
   const [attempt, setAttempt] = useState(0);
   const [forceNew, setForceNew] = useState(false);
   const [restoreFailed, setRestoreFailed] = useState(false);
@@ -112,6 +122,28 @@ export function TerminalPane({
 
     setError(null);
     setSession(null);
+    hiddenOutputRef.current = { chunks: [], bytes: 0, truncated: false };
+
+    const enqueueHiddenOutput = (chunk: Uint8Array) => {
+      const buffer = hiddenOutputRef.current;
+      buffer.chunks.push(chunk.slice());
+      buffer.bytes += chunk.byteLength;
+      while (
+        buffer.bytes > HIDDEN_OUTPUT_LIMIT_BYTES &&
+        buffer.chunks.length > 0
+      ) {
+        const excess = buffer.bytes - HIDDEN_OUTPUT_LIMIT_BYTES;
+        const first = buffer.chunks[0]!;
+        if (first.byteLength <= excess) {
+          buffer.chunks.shift();
+          buffer.bytes -= first.byteLength;
+        } else {
+          buffer.chunks[0] = first.slice(excess);
+          buffer.bytes -= excess;
+        }
+        buffer.truncated = true;
+      }
+    };
 
     const run = async () => {
       const renderConfig = await getTerminalRenderConfig().catch(() => null);
@@ -247,7 +279,13 @@ export function TerminalPane({
 
       const channel = new Channel<ArrayBuffer>();
       channel.onmessage = (chunk) => {
-        if (alive) terminal?.write(new Uint8Array(chunk));
+        if (!alive) return;
+        const bytes = new Uint8Array(chunk);
+        if (activeRef.current && !zoomHiddenRef.current) {
+          terminal?.write(bytes);
+        } else {
+          enqueueHiddenOutput(bytes);
+        }
       };
       try {
         await attachTerminal(info.stream_id, channel);
@@ -309,12 +347,21 @@ export function TerminalPane({
 
   useEffect(() => {
     if (!active || zoomHidden) return;
+    const terminal = terminalRef.current;
+    const buffer = hiddenOutputRef.current;
+    if (terminal) {
+      for (const chunk of buffer.chunks) terminal.write(chunk);
+      // Keep the marker visible after the retained tail; otherwise xterm's
+      // bounded scrollback can push a leading marker out of the viewport.
+      if (buffer.truncated) terminal.write(HIDDEN_TRUNCATION_MARKER);
+    }
+    hiddenOutputRef.current = { chunks: [], bytes: 0, truncated: false };
     try {
       fitAddonRef.current?.fit();
     } catch {
       // The pane may not have finished mounting yet.
     }
-    terminalRef.current?.focus();
+    terminal?.focus();
   }, [active, zoomed, zoomHidden]);
 
   useEffect(() => {

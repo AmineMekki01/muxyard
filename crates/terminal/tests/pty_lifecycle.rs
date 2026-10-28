@@ -115,6 +115,39 @@ fn snapshot_respects_configured_tail_bound() {
 }
 
 #[test]
+fn large_output_keeps_the_configured_tail_bounded() {
+    let temp = tempfile::tempdir().unwrap();
+    let hub = hub();
+    let mut config = config(temp.path().to_path_buf());
+    config.output_tail_bytes = 64 * 1024;
+    let mut session = PtySession::spawn(config, Arc::clone(&hub)).unwrap();
+    let subscription = hub
+        .subscribe(session.stream_id(), Some(4 * 1024 * 1024))
+        .unwrap();
+
+    session
+        .write(b"head -c 600000 /dev/zero | tr '\\0' 'x'; printf '\\nDONE-%s\\n' \"$((1+1))\"\n")
+        .unwrap();
+    let output = read_until(&subscription, b"DONE-2", Duration::from_secs(10));
+    assert!(
+        output.len() > 500_000,
+        "fixture output was too small: {} bytes",
+        output.len()
+    );
+
+    let snapshot = session.snapshot();
+    assert!(!snapshot.is_empty());
+    assert!(
+        snapshot.len() <= 64 * 1024,
+        "large-output snapshot grew to {} bytes",
+        snapshot.len()
+    );
+    assert!(snapshot.contains(&b'x'), "newest output was not retained");
+
+    session.close().unwrap();
+}
+
+#[test]
 fn shell_receives_terminal_color_defaults() {
     let temp = tempfile::tempdir().unwrap();
     let hub = hub();
