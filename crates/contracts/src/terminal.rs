@@ -24,6 +24,8 @@ pub struct TerminalSpawnRequest {
     pub shell: Option<String>,
     /// Stable per-pane history identity; the host maps it to a private HISTFILE.
     pub history_id: Option<Id>,
+    /// Owning project, when the terminal is opened in a project workspace.
+    pub project_id: Option<Id>,
     /// Initial rows.
     pub rows: u16,
     /// Initial columns.

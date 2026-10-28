@@ -1,7 +1,8 @@
 //! Typed local control commands and responses.
 
 use muxyard_contracts::{
-    ApiError, Project, ProjectListRequest, ProjectRegisterRequest, ProjectRemoveRequest,
+    ApiError, Project, ProjectListRequest, ProjectRegisterRequest, ProjectRemoveRequest, Task,
+    TaskAuditEvent, TaskCreateRequest, TaskListRequest, TaskUpdateRequest,
 };
 use serde::{Deserialize, Serialize};
 
@@ -88,3 +89,27 @@ pub const PROJECT_REGISTER_METHOD: &str = "project.register";
 
 /// Method name for removing a project registration.
 pub const PROJECT_REMOVE_METHOD: &str = "project.remove";
+
+/// Host-owned durable task persistence and transitions.
+pub trait TaskStore: Send + Sync {
+    /// List tasks, optionally filtered by project.
+    fn list_tasks(&self, request: &TaskListRequest) -> Result<Vec<Task>, String>;
+    /// Create a task in draft state.
+    fn create_task(&self, request: &TaskCreateRequest) -> Result<Task, String>;
+    /// Update task fields or transition state.
+    fn update_task(&self, request: &TaskUpdateRequest) -> Result<Task, String>;
+    /// Read audit events for a task.
+    fn task_audit(&self, task_id: &str) -> Result<Vec<TaskAuditEvent>, String>;
+}
+
+/// Method name for listing tasks.
+pub const TASK_LIST_METHOD: &str = "task.list";
+
+/// Method name for creating a task.
+pub const TASK_CREATE_METHOD: &str = "task.create";
+
+/// Method name for updating or transitioning a task.
+pub const TASK_UPDATE_METHOD: &str = "task.update";
+
+/// Method name for reading task audit events.
+pub const TASK_AUDIT_METHOD: &str = "task.audit";

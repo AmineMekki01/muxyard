@@ -13,7 +13,7 @@ use std::{
 };
 
 use muxyard_contracts::PROTOCOL_VERSION;
-use muxyard_ipc::{HostStatusResponse, IpcServer, ProjectStore, WorkspaceLayoutStore};
+use muxyard_ipc::{HostStatusResponse, IpcServer, ProjectStore, TaskStore, WorkspaceLayoutStore};
 use muxyard_platform::{
     ConfigStore, PlatformPaths, configure_detached, current_process_identity, ensure_private_dir,
     open_private_append, write_private_file,
@@ -163,6 +163,7 @@ impl HostRuntime {
             Arc::clone(&terminal),
             Arc::clone(&store) as Arc<dyn WorkspaceLayoutStore>,
             Arc::clone(&store) as Arc<dyn ProjectStore>,
+            Arc::clone(&store) as Arc<dyn TaskStore>,
         )?;
         write_ready_marker(&paths.host_ready_path(), lock.info())?;
 

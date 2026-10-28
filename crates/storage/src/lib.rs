@@ -4,6 +4,7 @@ mod database;
 mod host;
 mod migrations;
 mod projects;
+mod tasks;
 mod workspace;
 
 use std::{io, path::PathBuf};
@@ -16,6 +17,10 @@ pub use host::{
 pub use migrations::{MIGRATIONS, Migration, MigrationReport};
 pub use projects::{
     ProjectTrust, StoredProject, list_projects, register_project, remove_project, touch_project,
+};
+pub use tasks::{
+    StoredTask, TaskAuditEvent, TaskError, can_transition, create_task, get_task, link_agent,
+    link_session, list_audit_events, list_tasks, update_task,
 };
 pub use workspace::{
     StoredWorkspaceLayout, TerminalSessionState, delete_workspace_layout, get_workspace_layout,

@@ -48,6 +48,8 @@ type TerminalPaneProps = {
   sessionLost?: boolean;
   historyId?: string;
   cwd?: string | null;
+  projectId?: string | null;
+  projectCwd?: string | null;
   shell?: string | null;
   scrollOffset?: number;
   onViewport?: (offset: number) => void;
@@ -67,6 +69,8 @@ export function TerminalPane({
   sessionLost = false,
   historyId,
   cwd,
+  projectId = null,
+  projectCwd = null,
   shell,
   scrollOffset = 0,
   onViewport,
@@ -159,9 +163,10 @@ export function TerminalPane({
             cols: 80,
           }
         : await spawnTerminal({
-            cwd: cwd ?? null,
+            cwd: cwd ?? projectCwd ?? null,
             shell: shell ?? null,
             history_id: historyId ?? null,
+            project_id: projectId,
             rows: 24,
             cols: 80,
           });

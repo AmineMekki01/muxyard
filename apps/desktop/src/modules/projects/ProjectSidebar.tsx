@@ -67,12 +67,12 @@ export function ProjectSidebar({
         </ul>
       )}
       <form className="project-register" onSubmit={submit}>
-        <label htmlFor="project-path">Open directory</label>
+        <label htmlFor="project-path">Add project</label>
         <input
           id="project-path"
           value={path}
           onChange={(event) => setPath(event.target.value)}
-          placeholder="/path/to/project"
+          placeholder="Absolute project path"
           disabled={busy}
           autoComplete="off"
         />

@@ -91,10 +91,14 @@ export type TerminalWorkspaceHandle = {
 
 type TerminalWorkspaceProps = {
   shortcutsEnabled?: boolean;
+  projectId?: string | null;
+  projectCwd?: string | null;
 };
 
 type PaneLayoutProps = {
   node: LayoutNode;
+  projectId: string | null;
+  projectCwd: string | null;
   tab: TerminalTab;
   activeTabId: string | null;
   onFocus: (tabId: string, paneId: string) => void;
@@ -112,6 +116,8 @@ type PaneLayoutProps = {
 
 function PaneLayout({
   node,
+  projectId,
+  projectCwd,
   tab,
   activeTabId,
   onFocus,
@@ -148,6 +154,8 @@ function PaneLayout({
         sessionLost={node.sessionLost}
         historyId={node.historyId}
         cwd={node.cwd}
+        projectId={projectId}
+        projectCwd={projectCwd}
         shell={node.shell}
         scrollOffset={node.scrollOffset}
         onViewport={(offset) => onViewport(tab.id, node.id, offset)}
@@ -174,6 +182,8 @@ function PaneLayout({
       >
         <PaneLayout
           node={node.first}
+          projectId={projectId}
+          projectCwd={projectCwd}
           tab={tab}
           activeTabId={activeTabId}
           onFocus={onFocus}
@@ -198,6 +208,8 @@ function PaneLayout({
       >
         <PaneLayout
           node={node.second}
+          projectId={projectId}
+          projectCwd={projectCwd}
           tab={tab}
           activeTabId={activeTabId}
           onFocus={onFocus}
@@ -322,7 +334,10 @@ function closeTabSessions(tab: TerminalTab) {
 export const TerminalWorkspace = forwardRef<
   TerminalWorkspaceHandle,
   TerminalWorkspaceProps
->(function TerminalWorkspace({ shortcutsEnabled = true }, ref) {
+>(function TerminalWorkspace(
+  { shortcutsEnabled = true, projectId = null, projectCwd = null },
+  ref,
+) {
   const [workspace, setWorkspace] = useState<WorkspaceState>({
     tabs: [],
     activeTabId: null,
@@ -1006,6 +1021,8 @@ export const TerminalWorkspace = forwardRef<
           >
             <PaneLayout
               node={tab.root}
+              projectId={projectId}
+              projectCwd={projectCwd}
               tab={tab}
               activeTabId={workspace.activeTabId}
               onFocus={activatePane}

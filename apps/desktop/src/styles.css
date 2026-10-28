@@ -1246,3 +1246,163 @@ kbd {
 .project-error {
   color: #ffa198 !important;
 }
+
+.task-list {
+  display: grid;
+  gap: 6px;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.task-list li {
+  padding: 7px 8px;
+  border: 1px solid var(--color-line);
+  border-radius: var(--radius-sm);
+  background: var(--color-surface);
+}
+
+.task-row {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 6px;
+}
+
+.task-row strong {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-size: 12px;
+}
+
+.task-state {
+  color: var(--color-muted);
+  font-family: var(--font-mono);
+  font-size: 9px;
+  text-transform: uppercase;
+}
+
+.task-list p {
+  margin: 3px 0 0;
+  font-size: 11px;
+}
+
+.task-transition {
+  margin-top: 6px;
+  padding: 3px 7px;
+  border: 1px solid var(--color-line);
+  border-radius: var(--radius-sm);
+  color: var(--color-text);
+  background: var(--color-surface-raised);
+  font-size: 10px;
+}
+
+.task-create {
+  display: grid;
+  gap: 4px;
+  margin-top: var(--space-3);
+}
+
+.task-create label {
+  color: var(--color-muted);
+  font-size: 11px;
+}
+
+.task-create input {
+  min-width: 0;
+  padding: 5px 7px;
+  border: 1px solid var(--color-line);
+  border-radius: var(--radius-sm);
+  color: var(--color-text);
+  background: var(--color-surface);
+  font-size: 11px;
+}
+
+.task-create button {
+  justify-self: start;
+}
+
+.task-error {
+  color: #ffa198 !important;
+}
+
+.task-title-button {
+  min-width: 0;
+  padding: 0;
+  overflow: hidden;
+  border: 0;
+  color: var(--color-text);
+  background: transparent;
+  font-size: 12px;
+  font-weight: 600;
+  text-align: left;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.task-title-button:hover {
+  color: var(--color-accent);
+}
+
+.task-audit {
+  display: grid;
+  gap: 2px;
+  margin: 5px 0 0;
+  padding: 5px 0 0;
+  border-top: 1px solid var(--color-line);
+  list-style: none;
+}
+
+.task-audit li {
+  padding: 0;
+  border: 0;
+  color: var(--color-muted);
+  background: transparent;
+  font-family: var(--font-mono);
+  font-size: 9px;
+}
+
+.sidebar {
+  min-width: 0;
+  overflow-x: hidden;
+}
+
+.sidebar-section {
+  min-width: 0;
+}
+
+.task-list,
+.task-list li,
+.task-row {
+  min-width: 0;
+  max-width: 100%;
+}
+
+.task-list li {
+  overflow: hidden;
+}
+
+.task-row {
+  align-items: center;
+}
+
+.task-title-button {
+  flex: 1 1 auto;
+  max-width: 100%;
+}
+
+.task-state {
+  flex: 0 0 auto;
+  max-width: 45%;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.task-list p,
+.task-audit,
+.project-error,
+.task-error {
+  overflow-wrap: anywhere;
+}

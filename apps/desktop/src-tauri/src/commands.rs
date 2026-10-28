@@ -10,10 +10,11 @@ use std::{
 
 use muxyard_contracts::{
     ApiError, HostStatusEvent, HostStatusResponse, Project, ProjectListResponse,
-    ProjectRegisterRequest, ProjectRemoveRequest, ProjectRemoveResponse, TerminalCloseRequest,
-    TerminalInputRequest, TerminalRenderConfig, TerminalResizeRequest, TerminalSnapshotRequest,
-    TerminalSnapshotResponse, TerminalSpawnRequest, TerminalSpawnResponse, WorkspaceLayout,
-    WorkspaceLayoutSnapshot,
+    ProjectRegisterRequest, ProjectRemoveRequest, ProjectRemoveResponse, Task, TaskAuditRequest,
+    TaskAuditResponse, TaskCreateRequest, TaskListRequest, TaskListResponse, TaskUpdateRequest,
+    TerminalCloseRequest, TerminalInputRequest, TerminalRenderConfig, TerminalResizeRequest,
+    TerminalSnapshotRequest, TerminalSnapshotResponse, TerminalSpawnRequest, TerminalSpawnResponse,
+    WorkspaceLayout, WorkspaceLayoutSnapshot,
 };
 use muxyard_platform::{ConfigStore, PlatformPaths};
 use muxyard_terminal::TerminalFrameKind;
@@ -140,6 +141,44 @@ pub async fn project_remove(
     })
     .await
     .map_err(|_| internal("Project removal task failed."))?
+}
+
+/// List durable tasks.
+#[tauri::command]
+pub async fn task_list(request: TaskListRequest) -> Result<TaskListResponse, ApiError> {
+    tauri::async_runtime::spawn_blocking(move || HostBridge::for_current_user()?.task_list(request))
+        .await
+        .map_err(|_| internal("Task list task failed."))?
+}
+
+/// Create a durable task.
+#[tauri::command]
+pub async fn task_create(request: TaskCreateRequest) -> Result<Task, ApiError> {
+    tauri::async_runtime::spawn_blocking(move || {
+        HostBridge::for_current_user()?.task_create(request)
+    })
+    .await
+    .map_err(|_| internal("Task create task failed."))?
+}
+
+/// Update or transition a durable task.
+#[tauri::command]
+pub async fn task_update(request: TaskUpdateRequest) -> Result<Task, ApiError> {
+    tauri::async_runtime::spawn_blocking(move || {
+        HostBridge::for_current_user()?.task_update(request)
+    })
+    .await
+    .map_err(|_| internal("Task update task failed."))?
+}
+
+/// Read task audit history.
+#[tauri::command]
+pub async fn task_audit(request: TaskAuditRequest) -> Result<TaskAuditResponse, ApiError> {
+    tauri::async_runtime::spawn_blocking(move || {
+        HostBridge::for_current_user()?.task_audit(request)
+    })
+    .await
+    .map_err(|_| internal("Task audit task failed."))?
 }
 
 /// Create a native shell session in the host.
